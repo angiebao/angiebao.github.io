@@ -53,6 +53,42 @@ h2 {
   margin: 24px 0 7px;
 }
 
+.experience-list {
+  margin-top: 2px;
+}
+
+.experience-item {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: minmax(145px, 25%) 1fr;
+  padding: 15px 0;
+}
+
+.company {
+  vertical-align: top;
+}
+
+.company a {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  line-height: 1.15;
+}
+
+.company-icon {
+  flex: 0 0 auto;
+  height: 22px;
+  width: 22px;
+}
+
+.role p:first-child {
+  margin-top: 0;
+}
+
+.role p:last-child {
+  margin-bottom: 0;
+}
+
 p {
   margin: 7px 0;
 }
@@ -84,6 +120,7 @@ a:focus {
 
 .authors {
   color: var(--muted);
+  font-weight: bold;
 }
 
 footer {
@@ -132,5 +169,11 @@ footer {
 
   .intro-text {
     text-align: left;
+  }
+
+  .experience-item {
+    gap: 6px;
+    grid-template-columns: 1fr;
+    padding: 13px 0;
   }
 }
