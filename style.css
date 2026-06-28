@@ -89,6 +89,15 @@ h2 {
   margin-bottom: 0;
 }
 
+.role ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.role ul li {
+  margin-bottom: 5px;
+}
+
 p {
   margin: 7px 0;
 }

@@ -14,13 +14,13 @@
       <div class="intro-text">
         <h1>Anqi Bao</h1>
         <p>
-          I am a machine learning researcher with 5+ years of industry experience building large-scale models in adversarial, safety-critical domains. My work spans transformers, graph neural networks, representation learning for fraud detection, anomaly detection, and time-series modeling.
+          I am an Applied Scientist / ML Engineer with 6+ years of experience building production ML systems in safety-critical fraud and identity domains. My work spans LLM fine-tuning (LoRA, DPO, RLHF), transformer-based representation learning, graph neural networks, anomaly detection, and large-scale cloud ML pipelines across Azure and AWS.
         </p>
         <p>
-          I am currently a Senior Applied Scientist at The Trade Desk, where I research large-scale identity graphs for real-time bidding, ranking, anomaly detection, stability evaluation, and emergent structure analysis.
+          I am currently a Senior Applied Scientist at The Trade Desk, where I research large-scale identity graphs for real-time bidding, ranking, anomaly detection, stability evaluation, and emergent structure analysis. My interests include post-training techniques, reward modeling, and preference optimization.
         </p>
         <p class="links">
-          <a href="assets/Anqi_CV_LLM_202605.pdf.pdf">CV</a> /
+          <a href="assets/Anqi_CV.pdf">CV</a> /
           <a href="https://scholar.google.com/citations?user=8oSmAk4AAAAJ&amp;hl=en">Google Scholar</a> /
           <a href="https://www.linkedin.com/in/anqi-bao">LinkedIn</a>
         </p>
@@ -52,7 +52,15 @@
           </div>
           <div class="role">
             <p><strong>Senior Applied Scientist</strong><br>Jun 2021 - Oct 2025</p>
-            <p>Fine-tuned LLaMA-2 with LoRA for automatic fraud-rule generation; engineered pipelines that convert natural-language features into dense embeddings using pretrained LLMs; and built attention-based, time-series, and graph neural network systems for transactional data, entity linkage, anomaly discovery, bot detection, and customer fraud scenarios on Azure.</p>
+            <ul>
+              <li>Fine-tuned LLaMA-2 with LoRA using post-training techniques for domain-specific fraud rule generation, converting natural language customer requirements into a proprietary fraud query language; owned dataset construction, prompt/label formatting, training experiments, and evaluation.</li>
+              <li>Applied Direct Preference Optimization (DPO) to calibrate LLM-generated rules based on human feedback, improving rule quality and alignment with customer requirements.</li>
+              <li>Built evaluation workflows for LLM-generated fraud rules, including test-case curation, rule validity checks, precision/recall-style fraud metrics, and qualitative review with domain experts.</li>
+              <li>Engineered a pipeline to convert natural language features into dense embeddings using pretrained LLMs (e.g., BERT) for fraud detection, with dimensionality reduction for signal retention and noise reduction.</li>
+              <li>Applied attention-based (Transformer) techniques to extract hidden time-series information from transactional data for anomaly pattern detection.</li>
+              <li>Designed graph neural network pipelines (DeepWalk, GAT) for large-scale entity linkage and anomaly discovery, improving detection of coordinated malicious actors. Work published in Microsoft Journal of Applied Research.</li>
+              <li>Partnered with enterprise customers to translate fraud scenarios into ML/data specifications and built customized Azure-based modeling, evaluation, and visualization pipelines.</li>
+            </ul>
           </div>
         </article>
 
@@ -111,6 +119,14 @@
     </section>
 
     <section>
+      <h2>Skills</h2>
+      <p><strong>Languages:</strong> Python, C++, R, SQL</p>
+      <p><strong>Machine Learning:</strong> PyTorch, TensorFlow, Scikit-learn, Transformers, LoRA / PEFT, LLaMA-2 fine-tuning, BERT embeddings, representation learning, GNNs, anomaly detection, time-series modeling</p>
+      <p><strong>Tools &amp; Infrastructure:</strong> Azure, AWS, Hadoop, Spark, Kafka</p>
+      <p><strong>Specialties:</strong> LLM Post-training, Preference Optimization (DPO), RLHF, Reward Modeling, Agentic AI, Graph Neural Networks, Fraud Detection</p>
+    </section>
+
+    <section>
       <h2>Selected Publications</h2>
       <p>
         Enhancing Fraud Detection Using Graph Embeddings<br>
@@ -122,7 +138,7 @@
       </p>
       <p>
         Wellbore Schematics to Structured Data Using Artificial Intelligence Tools<br>
-        <span class="authors">Anqi Bao.</span> Offshore Technology Conference, 2019.
+        <span class="authors">Anqi Bao et al.</span> Offshore Technology Conference, 2019.
       </p>
     </section>
 
