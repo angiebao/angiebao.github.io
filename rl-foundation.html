@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RL Foundation — Tech Blog — Anqi Bao</title>
+  <meta name="description" content="Organized notes on reinforcement-learning foundations for LLM post-training: policy gradients, advantage estimation, TD learning, GAE, and value models.">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .rl-notes { max-width: 920px; margin-inline: auto; }
+    .rl-notes .lead { margin: 0 0 2.5rem; color: #555; font-size: 1.05rem; line-height: 1.7; }
+    .rl-notes h2 { margin-top: 2.75rem; padding-bottom: .4rem; border-bottom: 1px solid #ddd; }
+    .rl-notes h3 { margin-top: 2rem; }
+    .rl-notes p, .rl-notes li { line-height: 1.7; }
+    .rl-notes li + li { margin-top: .45rem; }
+    .rl-notes table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; }
+    .rl-notes th, .rl-notes td { padding: .75rem; border: 1px solid #ddd; text-align: left; vertical-align: top; }
+    .rl-notes th { background: #f5f5f5; }
+    .rl-notes .source-note { margin-top: 1.5rem; color: #666; font-size: .9rem; }
+    .rl-notes .notation-note { color: #666; font-size: .86em; font-weight: 400; }
+    .rl-notes .important-note { margin: 1.25rem 0; padding: 1rem 1.25rem; border-left: 4px solid #d6a400; background: #fff9df; }
+    .rl-notes .trajectory { margin: 1rem 0; padding: 1rem; overflow-x: auto; white-space: pre; background: #f7f7f7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.55; }
+    .math-block { margin: 1rem 0; padding: 1rem 1.25rem; overflow-x: auto; background: #f7f7f7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.7; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="notes-header">
+      <p><a href="notes.html">&larr; Tech Blog</a></p>
+      <h1>RL Foundation</h1>
+    </header>
+    <article class="notes-section rl-notes">
+      <p class="lead">These notes focus on PPO first. They build from the policy-gradient objective to advantage estimation, temporal-difference learning, generalized advantage estimation, and value-model training in LLM reinforcement learning.</p>
+
+      <h2>The big picture: where PPO fits in reinforcement learning</h2>
+      <p>At the most general level, reinforcement learning asks an agent to learn behavior that maximizes expected cumulative reward. The agent interacts with an environment, takes actions, receives rewards, and updates its behavior so that higher-reward trajectories become more likely.</p>
+      <div class="math-block">Objective: maximize J(θ) = E<sub>τ∼π<sub>θ</sub></sub>[R(τ)]</div>
+      <p>There is more than one way to pursue this objective. A useful working hierarchy is:</p>
+      <ol>
+        <li>
+          <strong>Model-free reinforcement learning:</strong> learn behavior from experience without first learning an explicit model of the environment's transitions.
+          <ul>
+            <li>
+              <strong>Value-based methods:</strong> learn values such as V(s) or Q(s,a) <span class="notation-note">(expected future return after action a in state s)</span>, then derive behavior by choosing high-value actions. Examples include tabular Q-learning and Deep Q-Networks (DQN).
+              <br><em>Concrete example:</em> in an Atari game, DQN estimates Q(screen, action) <span class="notation-note">(expected future score after taking that action from that screen)</span> for actions such as left, right, or fire, then usually chooses the action with the largest estimated Q-value <span class="notation-note">(largest expected future return)</span>.
+            </li>
+            <li>
+              <strong>Policy-based methods:</strong> represent and optimize the policy directly. Examples include REINFORCE, TRPO, and PPO.
+              <br><em>Concrete example:</em> a robot policy outputs a probability distribution over movements. After a successful trajectory, the update increases the probability of movements that contributed to the high return. In LLM post-training, each generated token is an action and PPO adjusts token probabilities according to estimated advantage.
+              <ul>
+                <li><strong>Policy-only:</strong> update the policy using sampled returns without learning a separate critic. Vanilla REINFORCE is the clearest example.</li>
+                <li><strong>Actor–critic:</strong> update the policy (actor) with help from a learned value function (critic). Examples include A2C, A3C, DDPG, TD3, SAC, and the usual implementation of PPO. The critic estimates how good the current state or action is; that estimate supplies a lower-variance learning signal for the actor.</li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+        <li>
+          <strong>Model-based reinforcement learning:</strong> learn or use a model of the environment to predict what will happen, then plan or improve behavior using those predictions. Examples include Dyna-Q, Model Predictive Control (MPC), AlphaZero, and MuZero.
+          <br><em>Concrete example:</em> before moving, a game-playing agent simulates several possible future action sequences, estimates their outcomes, and chooses the action whose simulated future looks best. MuZero learns the dynamics needed for planning without reconstructing every detail of the observation.
+        </li>
+      </ol>
+      <p>This hierarchy is intentionally practical rather than absolute. A model-based system may still contain value functions, policies, or actor–critic components inside its planning and learning loop.</p>
+      <p>These notes begin with the policy-gradient direction. In this direction, we estimate how changing the policy parameters would change expected reward, then construct a loss function whose gradient produces a useful policy update. PPO is one algorithm for making that update practical and stable; it is not the definition of reinforcement learning itself.</p>
+
+      <h3>Other methods within the policy-gradient direction</h3>
+      <p>Even after choosing policy-gradient optimization, PPO is not the only option:</p>
+      <ul>
+        <li>
+          <strong>REINFORCE:</strong> uses the complete Monte Carlo return G<sub>t</sub> to scale ∇log π(a<sub>t</sub>|s<sub>t</sub>). For example, if a CartPole episode survives for a long time, all sampled actions in that successful trajectory are reinforced according to their returns. It is conceptually simple but often has high variance because the update waits for the actual trajectory outcome.
+        </li>
+        <li>
+          <strong>Actor–critic:</strong> learns a critic alongside the policy and uses the critic as a baseline or return estimator. For example, A2C or A3C updates the actor using an advantage such as G<sub>t</sub> − V(s<sub>t</sub>) while simultaneously training V(s<sub>t</sub>) to predict returns. This usually reduces variance compared with pure REINFORCE.
+        </li>
+        <li>
+          <strong>TRPO (Trust Region Policy Optimization):</strong> maximizes a policy-improvement objective while explicitly constraining the average KL divergence between the old and new policies. In a locomotion task, this prevents one batch from changing the robot's gait so drastically that previously useful behavior is destroyed.
+        </li>
+        <li>
+          <strong>PPO (Proximal Policy Optimization):</strong> approximates the trust-region idea with a simpler clipped or KL-penalized objective. If an action's probability ratio moves outside the permitted range, clipping prevents that sample from continuing to push the policy too far. In LLM RLHF, this helps keep a policy update from moving token probabilities excessively far from the rollout policy in one optimization round.
+        </li>
+      </ul>
+      <p>So the hierarchy to keep in mind is: <strong>reinforcement learning → maximize expected reward → choose an optimization family → policy-gradient methods → choose a specific update rule such as REINFORCE, TRPO, or PPO.</strong> We focus on PPO first because it provides a useful path through the core ideas of policy gradients, advantage estimation, critics, TD learning, and GAE.</p>
+      <p class="source-note">Policy-gradient terminology and algorithm examples in this section follow Lilian Weng's overview, <a href="https://lilianweng.github.io/posts/2018-04-08-policy-gradient/">“Policy Gradient Algorithms.”</a></p>
+
+      <h2>From reward to policy gradient</h2>
+      <p>The reward function is defined as an expectation over the states and actions a policy actually visits: the sum, over states, of how often that state is visited times its value, which itself breaks down into the sum over actions of how likely the policy is to take that action times the expected return of taking it.</p>
+      <p>J(θ) = Σ<sub>s</sub> d<sup>π</sup>(s) V<sup>π</sup>(s) = Σ<sub>s</sub> d<sup>π</sup>(s) Σ<sub>a</sub> π<sub>θ</sub>(a|s) Q<sup>π</sup>(s,a) <span class="notation-note">(Q: expected future return after action a in state s)</span></p>
+      <p>A distinction worth being precise about: Q(s,a) <span class="notation-note">(expected future return after action a in state s)</span> is <em>not</em> the immediate reward for the current action. It includes the rewards obtained while continuing under the policy.</p>
+      <p>It's not necessary to differentiate d or Q <span class="notation-note">(expected future return from the state-action pair)</span> with respect to θ at all &mdash; the core idea of policy gradient is that we're estimating the gradient of the reward function directly. That's what the Policy Gradient Theorem gives us:</p>
+      <p>∇<sub>θ</sub>J(θ) = E<sub>s~d<sup>πθ</sup>, a~πθ</sub>[∇<sub>θ</sub> log π<sub>θ</sub>(a|s) · Q<sup>πθ</sup>(s,a)]</p>
+
+      <h2>Why advantage instead of raw Q <span class="notation-note">(expected future return after action a in state s)</span></h2>
+      <p>Q <span class="notation-note">(expected future return after action a in state s)</span> can be replaced with Advantage, where Q − V means the expected return of the action minus the expected return of the state. This asks: after choosing a<sub>t</sub> in s<sub>t</sub>, how much better or worse was the result than the policy's average expectation in that state? Subtracting the state-dependent baseline from Q <span class="notation-note">(expected future return from the state-action pair)</span> does not change the gradient's expectation, but it reduces variance and stabilizes the loss.</p>
+      <p>gradient ≈ advantage × ∇<sub>θ</sub> log π<sub>θ</sub>(action | state), &nbsp; A<sup>π</sup>(s<sub>t</sub>,a<sub>t</sub>) = Q<sup>π</sup>(s<sub>t</sub>,a<sub>t</sub>) − V<sup>π</sup>(s<sub>t</sub>) <span class="notation-note">(Q: expected future return after a<sub>t</sub> in s<sub>t</sub>)</span></p>
+
+      <h3>Example: advantage for a terminal answer</h3>
+      <p>Suppose the state s contains the question “1 + 1,” and the critic predicts V(s) = 90. This means the critic expects an average future return of 90 before seeing which answer the policy chooses.</p>
+      <ul>
+        <li>
+          <strong>The model answers “2”:</strong> the episode ends with reward 100, so Q(s, “2”) <span class="notation-note">(expected future return after choosing “2”)</span> = 100.
+          <div class="math-block">A(s, “2”) = Q(s, “2”) − V(s) = 100 − 90 = 10</div>
+          The action performed 10 points better than the critic expected.
+        </li>
+        <li>
+          <strong>The model answers “3”:</strong> the episode ends with reward 0, so Q(s, “3”) <span class="notation-note">(expected future return after choosing “3”)</span> = 0.
+          <div class="math-block">A(s, “3”) = Q(s, “3”) − V(s) = 0 − 90 = −90</div>
+          The action performed 90 points worse than the critic expected.
+        </li>
+      </ul>
+      <p>This example uses terminal actions, so the final reward is the complete future return. For a nonterminal action, one-step TD estimates Q(s<sub>t</sub>,a<sub>t</sub>) <span class="notation-note">(expected future return after a<sub>t</sub> in s<sub>t</sub>)</span> with the immediate reward plus the next state's predicted value:</p>
+      <div class="math-block">Q̂(s<sub>t</sub>,a<sub>t</sub>) = r<sub>t</sub> + γV(s<sub>t+1</sub>)</div>
+      <p>Subtracting the current baseline gives the one-step advantage, which is also the TD error:</p>
+      <div class="math-block">Â<sub>t</sub><sup>(1)</sup> = Q̂(s<sub>t</sub>,a<sub>t</sub>) − V(s<sub>t</sub>) = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>) = δ<sub>t</sub></div>
+
+      <h2>Estimating Q <span class="notation-note">(expected future return after action a in state s)</span> the naive way &mdash; and why it's too expensive</h2>
+      <p>Q(s<sub>t</sub>,a<sub>t</sub>) <span class="notation-note">(expected future return after a<sub>t</sub> in s<sub>t</sub>)</span> represents the return obtainable from the current state and action all the way to the end. The most direct way to estimate it: starting from the same prefix and token, sample many future continuations y<sup>(1)</sup><sub>t+1:T</sub>, &hellip;, y<sup>(K)</sup><sub>t+1:T</sub>, score each complete response with the reward model to get r<sup>(1)</sup>, &hellip;, r<sup>(K)</sup>, then average:</p>
+      <p>Q̂(s<sub>t</sub>,a<sub>t</sub>) = (1/K) Σ<sub>k=1</sub><sup>K</sup> R<sup>(k)</sup></p>
+      <p>When K is large enough, this approaches the true Q <span class="notation-note">(expected future return from the state-action pair)</span>. But the procedure is extremely expensive:</p>
+      <ul>
+        <li>Every token needs many sampled continuations.</li>
+        <li>Every continuation needs a reward-model pass.</li>
+        <li>A single response may already contain thousands of tokens.</li>
+      </ul>
+      <p>Estimating V follows the same pattern, except the current action is sampled from the policy rather than fixed:</p>
+      <ol>
+        <li>Start from state s<sub>t</sub>.</li>
+        <li>Sample the first token according to the policy.</li>
+        <li>Continue generating a complete answer and obtain its return.</li>
+        <li>Repeat M times and average the returns.</li>
+      </ol>
+      <p>Because this computation is so expensive, PPO does not explicitly estimate Q <span class="notation-note">(expected future return after the current token)</span> this way for every token in practice.</p>
+
+      <h2>Value function fundamentals: the Bellman Equation</h2>
+      <p>The value of being in a state s under a specific policy π is the expected immediate reward plus the discounted expected value of the next state s':</p>
+      <p>V<sup>π</sup>(s) = Σ<sub>s'</sub> T(s,π(s),s') (R(s,π(s),s') + γV<sup>π</sup>(s'))</p>
+      <p>where s is the current state, π(s) is the action taken under policy π, T(s,a,s') is the transition probability of landing in s' after taking action a in state s, R(s,a,s') is the immediate reward received, and γ (0 ≤ γ &lt; 1) is the discount factor determining how much future rewards are valued relative to immediate ones.</p>
+      <p>To find the <em>best</em> possible policy, we use the Bellman Optimality Equation. It states that the value of a state under an optimal policy must equal the expected return from the best possible action available in that state &mdash; instead of following one fixed policy π, it evaluates every possible action a ∈ A and picks whichever maximizes the sum of immediate reward and discounted downstream value:</p>
+      <p>V*(s) = max<sub>a∈A</sub> Σ<sub>s'∈S</sub> T(s,a,s') (R(s,a,s') + γV*(s'))</p>
+
+      <h2>Temporal Difference learning: the core idea of bootstrapping</h2>
+      <p>The simplest form of TD learning is TD(0). When an agent transitions from state S to a new state S', receives reward R, and uses discount factor γ, the update rule for V(S) is:</p>
+      <p>V(S) ← V(S) + α(R + γV(S') − V(S))</p>
+      <p>Here V(S) is the current estimated value of the state you just left; α is the learning rate, i.e. how much weight to give new information; R + γV(S') is the <strong>TD Target</strong> &mdash; the actual reward received plus the discounted estimated value of the state you just landed in; and (R + γV(S') − V(S)) is the <strong>TD Error</strong>, the discrepancy between your estimate before the step and your estimate after it. The goal of TD learning is simply to keep adjusting V(S) until this error shrinks toward zero.</p>
+      <p>What makes this different from Monte Carlo is worth stating plainly: TD can stop midway. r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;V(s<sub>t+2</sub>) is a legitimate estimate because V(s<sub>t+2</sub>) estimates the remaining future for you. Monte Carlo, by contrast, doesn't trust any intermediate value estimate &mdash; its return G<sub>t</sub> = r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;r<sub>t+2</sub> + &hellip; + r<sub>T</sub> requires actually walking all the way to the terminal state. In short: <strong>TD = a real portion of the future + a predicted portion of the future; MC = wait for the entire real outcome.</strong> That's what "bootstrap" means here &mdash; using a slice of real, observed experience plus the critic's own value estimate to stand in for everything not yet observed.</p>
+
+      <h2>From TD(0) to n-step TD to GAE</h2>
+      <div class="important-note">
+        <strong>Very important:</strong> this is the essence of Temporal Difference learning. The central idea is:
+        <div class="math-block">TD = part of the real future + a value estimate for the remaining future</div>
+        This is called <strong>bootstrapping</strong>.
+      </div>
+
+      <h3>1-step TD: observe one real step, then bootstrap</h3>
+      <ul>
+        <li><strong>1-step return:</strong> only one future step is directly observed.</li>
+      </ul>
+      <div class="math-block">R<sub>t</sub><sup>(1)</sup> = r<sub>t</sub> + γV(s<sub>t+1</sub>)</div>
+      <ul>
+        <li>We observe what actually happens from t to t+1 and receive the real reward r<sub>t</sub>.</li>
+        <li>We do not wait for the rest of the trajectory to happen. Instead, V(s<sub>t+1</sub>) estimates the remaining future.</li>
+        <li>We use this target to correct the current prediction V(s<sub>t</sub>).</li>
+      </ul>
+      <div class="math-block">δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)</div>
+      <p>Here δ<sub>t</sub> is the <strong>TD error</strong>. The name “Temporal Difference” refers to a <strong>consistency error between value predictions at adjacent time steps</strong>.</p>
+
+      <h3>2-step TD: observe two real steps, then bootstrap</h3>
+      <div class="math-block">R<sub>t</sub><sup>(2)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>V(s<sub>t+2</sub>)</div>
+      <div class="trajectory" aria-label="Two-step TD trajectory">Directly observed
+r_t ──→ r_t+1
+            │
+            ▼
+          s_t+2
+            │
+            │ stop the real rollout
+            ▼
+        V(s_t+2)
+            │
+            ▼
+ estimates the entire remaining future</div>
+      <p><strong>2-step TD = 2 steps of reality + bootstrap the rest.</strong></p>
+
+      <h3>n-step TD: observe n real steps, then hand off to the critic</h3>
+      <div class="math-block">R<sub>t</sub><sup>(n)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + ⋯ + γ<sup>n−1</sup>r<sub>t+n−1</sub> + γ<sup>n</sup>V(s<sub>t+n</sub>)</div>
+      <p><strong>n-step TD = n real steps + the critic's estimate for everything after that.</strong> This is also bootstrapping.</p>
+
+      <h3>The essential difference between TD and Monte Carlo</h3>
+      <ul>
+        <li>
+          <strong>TD can stop before the trajectory ends:</strong>
+          <div class="math-block">r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>V(s<sub>t+2</sub>)</div>
+          V(s<sub>t+2</sub>) estimates the remaining future.
+        </li>
+        <li>
+          <strong>Monte Carlo does not use an intermediate value estimate:</strong>
+          <div class="math-block">G<sub>t</sub> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>r<sub>t+2</sub> + ⋯ + γ<sup>T−t</sup>r<sub>T</sub></div>
+          It must follow the real trajectory all the way to the terminal state.
+          <div class="trajectory" aria-label="Monte Carlo trajectory">t ─────────────────────────────→ terminal
+  real   real   real   real   real   real</div>
+        </li>
+      </ul>
+      <p><strong>Summary:</strong> TD uses part of the real future and predicts the rest; Monte Carlo waits for the complete real outcome.</p>
+
+      <p>1-step TD only truly observes one step: R<sub>t</sub><sup>(1)</sup> = r<sub>t</sub> + γV(s<sub>t+1</sub>). You know what really happened going from t to t+1 and you have r<sub>t</sub>, but rather than waiting for everything after that to actually play out, you directly trust V(s<sub>t+1</sub>)'s estimate of everything remaining. 2-step TD truly observes two steps before handing off to the critic: R<sub>t</sub><sup>(2)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;V(s<sub>t+2</sub>). The general n-step version:</p>
+      <p>R<sub>t</sub><sup>(n)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + &hellip; + γ<sup>n−1</sup>r<sub>t+n−1</sub> + γ<sup>n</sup>V(s<sub>t+n</sub>) &nbsp; = &nbsp; (n steps of actual experience) + (estimate of everything remaining)</p>
+      <h3>From n-step return to n-step advantage</h3>
+      <p>The n-step advantage compares the n-step return with the value predicted at the current state:</p>
+      <div class="math-block">Â<sub>t</sub><sup>(n)</sup> = R<sub>t</sub><sup>(n)</sup> − V(s<sub>t</sub>)</div>
+
+      <p>First, apply this definition directly to the 1-step and 2-step returns:</p>
+      <ol>
+        <li>
+          <strong>1-step advantage</strong>
+          <p>The 1-step return is:</p>
+          <div class="math-block">R<sub>t</sub><sup>(1)</sup> = r<sub>t</sub> + γV(s<sub>t+1</sub>)</div>
+          <p>Subtract the current-state baseline V(s<sub>t</sub>):</p>
+          <div class="math-block">Â<sub>t</sub><sup>(1)</sup> = R<sub>t</sub><sup>(1)</sup> − V(s<sub>t</sub>) = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)</div>
+        </li>
+        <li>
+          <strong>2-step advantage</strong>
+          <p>The 2-step return is:</p>
+          <div class="math-block">R<sub>t</sub><sup>(2)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>V(s<sub>t+2</sub>)</div>
+          <p>Subtract the current-state baseline V(s<sub>t</sub>):</p>
+          <div class="math-block">Â<sub>t</sub><sup>(2)</sup> = R<sub>t</sub><sup>(2)</sup> − V(s<sub>t</sub>) = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>V(s<sub>t+2</sub>) − V(s<sub>t</sub>)</div>
+        </li>
+      </ol>
+
+      <h3>Connecting these advantages to TD residuals</h3>
+      <p>Now define the one-step TD residual:</p>
+      <div class="math-block">δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)</div>
+      <p>Comparing this definition with the advantages derived above gives:</p>
+      <ul>
+        <li><strong>1-step:</strong> Â<sub>t</sub><sup>(1)</sup> = δ<sub>t</sub></li>
+        <li><strong>2-step:</strong> Â<sub>t</sub><sup>(2)</sup> = δ<sub>t</sub> + γδ<sub>t+1</sub></li>
+        <li><strong>n-step:</strong> Â<sub>t</sub><sup>(n)</sup> = Σ<sub>l=0</sub><sup>n−1</sup> γ<sup>l</sup>δ<sub>t+l</sub></li>
+      </ul>
+      <p>The next derivation verifies that the 2-step advantage obtained from the return definition is identical to the 2-step advantage obtained from TD residuals.</p>
+
+      <h3>Why the two formulas for 2-step advantage are equivalent</h3>
+      <div class="important-note">
+        <p><strong>The two formulas being compared are:</strong></p>
+        <ol>
+          <li>
+            <strong>Formula 1 — derived from Â<sub>t</sub><sup>(2)</sup> = R<sub>t</sub><sup>(2)</sup> − V(s<sub>t</sub>):</strong>
+            <div class="math-block">Â<sub>t</sub><sup>(2)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>V(s<sub>t+2</sub>) − V(s<sub>t</sub>)</div>
+            This says: observe two real rewards, estimate the remaining future with V(s<sub>t+2</sub>), then subtract the current baseline V(s<sub>t</sub>).
+          </li>
+          <li>
+            <strong>Formula 2 — derived from one-step TD residuals:</strong>
+            <div class="math-block">Â<sub>t</sub><sup>(2)</sup> = δ<sub>t</sub> + γδ<sub>t+1</sub></div>
+            This says: add the current TD error to the discounted TD error from the next time step.
+          </li>
+        </ol>
+        <p><strong>Claim:</strong> Formula 1 and Formula 2 produce exactly the same 2-step advantage.</p>
+      </div>
+      <p>The following expansion shows why these two formulas produce exactly the same value:</p>
+      <ol>
+        <li>
+          Start with the TD-residual form:
+          <div class="math-block">Â<sub>t</sub><sup>(2)</sup> = δ<sub>t</sub> + γδ<sub>t+1</sub></div>
+        </li>
+        <li>
+          Expand both residuals:
+          <div class="math-block">[r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)] + γ[r<sub>t+1</sub> + γV(s<sub>t+2</sub>) − V(s<sub>t+1</sub>)]</div>
+        </li>
+        <li>
+          The intermediate value terms cancel:
+          <div class="math-block">+γV(s<sub>t+1</sub>) − γV(s<sub>t+1</sub>) = 0</div>
+        </li>
+        <li>
+          The remaining terms are exactly the two-step return minus the current-state baseline:
+          <div class="math-block">Â<sub>t</sub><sup>(2)</sup> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>V(s<sub>t+2</sub>) − V(s<sub>t</sub>)</div>
+        </li>
+      </ol>
+
+      <h3>Two views of the same quantity</h3>
+      <ul>
+        <li><strong>TD-residual view:</strong> accumulate the discounted TD prediction errors over the next n steps.</li>
+        <li><strong>n-step-return view:</strong> observe n real rewards, use V(s<sub>t+n</sub>) to estimate everything after them, and subtract the current baseline V(s<sub>t</sub>).</li>
+      </ul>
+      <p>Both views produce the same n-step advantage. Because V(s<sub>t+n</sub>) already summarizes the expected future from that point onward, the rollout only needs to observe n real steps before handing the rest of the estimate to the critic.</p>
+      <p>GAE takes this one step further by not committing to any single n. It has two equivalent definitions worth holding in mind together. First, as a discounted, weighted sum of one-step TD residuals:</p>
+      <p>Â<sub>t</sub><sup>GAE(γ,λ)</sup> = δ<sub>t</sub> + γλδ<sub>t+1</sub> + (γλ)<sup>2</sup>δ<sub>t+2</sub> + ⋯ = Σ<sub>l=0</sub><sup>∞</sup> (γλ)<sup>l</sup> δ<sub>t+l</sub></p>
+      <p>Second, as a (1−λ)-weighted average across every n-step advantage estimator at once:</p>
+      <p>Â<sub>t</sub><sup>GAE</sup> = (1−λ) [Â<sub>t</sub><sup>(1)</sup> + λÂ<sub>t</sub><sup>(2)</sup> + λ<sup>2</sup>Â<sub>t</sub><sup>(3)</sup> + ⋯] = (1−λ) Σ<sub>n=1</sub><sup>∞</sup> λ<sup>n−1</sup> Â<sub>t</sub><sup>(n)</sup></p>
+      <p>λ ∈ [0, 1) is the dial that trades bias against variance. At λ = 0, GAE collapses to pure TD(0): low variance (it doesn't depend on a long chain of random future events), but high bias if the value model V(s) is wrong. At λ = 1, it collapses to pure Monte Carlo: zero bias (it uses true observed data), but extreme variance, since one unlucky random action mid-episode can swing the entire return. In practice, setting λ around 0.95 tends to land in a sweet spot: a large reduction in variance for only a small amount of added bias.</p>
+
+      <h2>The full pipeline, in one line</h2>
+      <p>Putting it together: <strong>Reward + Value &rarr;<sup>GAE</sup> Â<sub>t</sub> &rarr;<sup>PPO loss</sup> Policy update</strong>, and in parallel the same advantage becomes the critic's own regression target: <strong>Â<sub>t</sub> + V<sub>old</sub>(s<sub>t</sub>) = R̂<sub>t</sub><sup>λ</sup> &rarr;<sup>value loss</sup> Value-model update</strong>. Framed as a single lookup table, in the LLM alignment setting &mdash; where every intermediate token reward is zero and only the terminal step T carries the real evaluation score r<sub>T</sub> &mdash; four estimators trade off differently:</p>
+      <table>
+        <thead><tr><th>Framework</th><th>Target Q<sub>t</sub><br><small>(expected future return after a<sub>t</sub> in s<sub>t</sub>)</small></th><th>Critic baseline V(s<sub>t</sub>)</th><th>Advantage A<sub>t</sub></th></tr></thead>
+        <tbody>
+          <tr><td>1-step TD / TD(0)</td><td>r<sub>t</sub> + γV(s<sub>t+1</sub>)</td><td>V(s<sub>t</sub>)</td><td>r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>) &nbsp;(= δ<sub>t</sub>)</td></tr>
+          <tr><td>2-step TD</td><td>r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;V(s<sub>t+2</sub>)</td><td>V(s<sub>t</sub>)</td><td>r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;V(s<sub>t+2</sub>) − V(s<sub>t</sub>)</td></tr>
+          <tr><td>Monte Carlo / TD(1)</td><td>Σ<sub>k=t</sub><sup>T</sup> γ<sup>k−t</sup>r<sub>k</sub> = γ<sup>T−t</sup>r<sub>T</sub></td><td>V(s<sub>t</sub>)</td><td>γ<sup>T−t</sup>r<sub>T</sub> − V(s<sub>t</sub>)</td></tr>
+          <tr><td>GAE (0 ≤ λ &lt; 1)</td><td>V(s<sub>t</sub>) + Â<sub>t</sub><sup>GAE</sup></td><td>V(s<sub>t</sub>)</td><td>Σ<sub>l=0</sub><sup>T−t−1</sup> (γλ)<sup>l</sup>δ<sub>t+l</sub></td></tr>
+        </tbody>
+      </table>
+      <p>This maps onto two concrete training strategies. A <strong>Monte Carlo strategy</strong> scales the policy gradient using Â = γ<sup>T−t</sup>r<sub>T</sub> − V(s<sub>t</sub>), where every single token blindly inherits the same sequence-level blame or praise, and trains the critic by minimizing MSE directly against the full empirical outcome: L = (1/T)Σ<sub>t=1</sub><sup>T</sup> (V(s<sub>t</sub>) − γ<sup>T−t</sup>r<sub>T</sub>)&sup2;. Zero bias &mdash; targets reflect the real sequence result &mdash; but extreme variance, since trajectory fluctuations heavily destabilize the gradient. A <strong>GAE strategy</strong> scales the policy gradient smoothly using Â<sup>GAE</sup>, where the late-stage reward echo decays exponentially by (γλ)<sup>l</sup>, and trains the critic against the GAE-bootstrapped value target instead: L = (1/T)Σ<sub>t=1</sub><sup>T</sup> (V(s<sub>t</sub>) − [V(s<sub>t</sub>) + Â<sub>t</sub><sup>GAE</sup>])&sup2;. Balanced variance, since intermediate critic anchors intercept noise, at the cost of some controlled bias if the critic network is still undertrained.</p>
+
+      <h2>Why Monte Carlo is unstable for training the value model itself</h2>
+      <p>It's worth being explicit that Monte Carlo and GAE aren't only used to compute the Advantage that updates the policy (the Actor) &mdash; they're also the two core ways of training the Value Model (Critic) itself, and the difference in stability there is stark.</p>
+      <p><strong>Training the critic with pure Monte Carlo:</strong> Monte Carlo insists that the training target at <em>every single token position</em> must equal the true final return &mdash; say, a score of 1.0. It forces V(s<sub>1</sub>) toward 1.0, V(s<sub>50</sub>) toward 1.0, V(s<sub>99</sub>) toward 1.0, all identically. The result: as soon as the very last step is botched, the target for the entire trajectory gets dragged toward that final outcome, regardless of position. This is exactly what produces Monte Carlo's high variance as a training signal &mdash; the value model can never hold on to the memory that "things were going well earlier," because its target keeps swinging violently with every single update.</p>
+      <p><strong>Training the critic with TD(0)/GAE:</strong> TD(0)'s target doesn't look directly at the final score at all; it only looks one step ahead, Target<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>). Consider a sequence that was tracking a strong outcome (say, value estimates hovering around 9.0) the whole way through, and then collapses to a real final score of only 1.0 at the very last step. At step 99, the training target is Target<sub>99</sub> = r<sub>99</sub> + V(s<sub>100</sub>) = 0 + 1.0 = 1.0 &mdash; the real outcome genuinely did get worse there, so V(s<sub>99</sub>) correctly gets pulled down toward 1.0. But at step 98, the training target is Target<sub>98</sub> = r<sub>98</sub> + V(s<sub>99</sub>) &mdash; and critically, at <em>this particular round</em> of updating, the V(s<sub>99</sub>) sitting in memory hasn't been corrected yet and is still 9.0. So step 98's target comes out to 0 + 9.0 = 9.0, and V(s<sub>98</sub>) stays completely rock-solid at 9.0, needing no downward correction in this update at all.</p>
+      <p>The point: with TD(0)/GAE, a bad ending doesn't instantly invalidate every earlier value estimate the way it does under Monte Carlo. The correction for a bad outcome only propagates backward one step at a time, across many training updates &mdash; which is exactly why bootstrapped targets are so much more stable to train against. (In practice, the value model is trained with full-prefix training: a single 100-token sequence can supply 100 separate training examples at once, using a causal mask.)</p>
+
+      <h2>Bootstrapping a value model from scratch</h2>
+      <p>The first time you train an LLM with PPO, there's no existing critic. In principle you can generate rollouts and observe the final reward directly, then treat every prefix's training target as that same terminal reward (prefix s1, s2, s3 all trained toward, say, a reward of 5) &mdash; this doesn't need an old critic to generate the target at all. So theoretically, the critic can start from random initialization and train purely off Monte Carlo returns. The only problem: this starts out with very high variance and is relatively unstable to train. So in practice, LLM RLHF prefers a warm start. Three common initialization methods:</p>
+      <ul>
+        <li><strong>A &mdash; Initialize from the reward model.</strong> Classic InstructGPT-style: V<sub>0</sub> ← RM. The scalar head already carries a reward-related representation, which is a natural choice inside classic RLHF. A reward model appearing to "output one value per rollout" usually isn't because its head can only output one value &mdash; in a common causal-LM reward model, the same scalar head can actually act on every token's hidden state; the reward model just conventionally uses only the last valid token's scalar as the reward for the whole response.</li>
+        <li><strong>B &mdash; SFT/Policy backbone + a new value head.</strong> Split the SFT model into the part you keep (the transformer body) and the part you don't (the LM head W<sub>LM</sub>: R<sup>d</sup> → R<sup>|V|</sup>, which produces a vocabulary distribution &mdash; not what a critic needs). The critic doesn't need p(token<sub>1</sub>), p(token<sub>2</sub>), &hellip;; it needs a scalar, V(s<sub>t</sub>). So swap the LM head for a new value head w<sub>V</sub>: R<sup>d</sup> → R, randomly initialized: V<sub>0</sub> = Transformer<sub>θSFT</sub> + RandomLinear(d, 1). The same SFT checkpoint then branches into a policy path (transformer &rarr; LM head &rarr; vocab logits) and a critic path (the same transformer &rarr; a fresh random value head &rarr; per-token scalars V<sub>1</sub>&hellip;V<sub>T</sub>).</li>
+        <li><strong>C &mdash; Dedicated warm-up of the critic first.</strong> Fix the policy at π<sub>SFT</sub>, generate a large number of rollouts, get the actual return G<sub>t</sub> for each, then pretrain: min<sub>ψ</sub> Σ<sub>t</sub> (V<sub>ψ</sub>(s<sub>t</sub>) − G<sub>t</sub>)&sup2;, giving V<sub>0</sub>. Only after that does formal joint actor+critic training begin. The idea is easy to follow: before formal PPO starts, first let the critic learn a basically reliable return predictor.</li>
+      </ul>
+
+      <h2>Handwritten derivations</h2>
+      <p>The handwritten pages expand the same Monte Carlo and GAE identities algebraically.</p>
+
+      <h3>Monte Carlo return</h3>
+      <div class="math-block">R<sub>t</sub> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>r<sub>t+2</sub> + ⋯ + γ<sup>T−t</sup>r<sub>T</sub></div>
+      <div class="math-block">A<sub>t</sub> = R<sub>t</sub> − V(s<sub>t</sub>)</div>
+
+      <h3>GAE expansion</h3>
+      <div class="math-block">δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)</div>
+      <div class="math-block">Â<sub>t</sub><sup>GAE</sup> = δ<sub>t</sub> + γλδ<sub>t+1</sub> + (γλ)<sup>2</sup>δ<sub>t+2</sub> + (γλ)<sup>3</sup>δ<sub>t+3</sub> + ⋯</div>
+      <div class="math-block">Â<sub>t</sub><sup>GAE</sup> = Σ<sub>l=0</sub><sup>∞</sup>(γλ)<sup>l</sup>δ<sub>t+l</sub></div>
+      <ul>
+        <li><strong>λ = 0:</strong> Â<sub>t</sub><sup>GAE</sup> = δ<sub>t</sub>, the one-step TD residual.</li>
+        <li><strong>λ = 1:</strong> the value terms telescope, leaving R<sub>t</sub> − V(s<sub>t</sub>), the Monte Carlo advantage.</li>
+        <li><strong>0 &lt; λ &lt; 1:</strong> later TD residuals receive exponentially smaller weights.</li>
+      </ul>
+
+    </article>
+    <footer><a href="index.html">&larr; Back to home</a></footer>
+  </main>
+</body>
+</html>
