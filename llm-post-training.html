@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Post-Training — Tech Blog — Anqi Bao</title>
+  <meta name="description" content="Anqi Bao's notes on LLM post-training: SFT vs. RL, PPO, DPO, GRPO, and DAPO's fixes to GRPO's failure modes.">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .notes-section { max-width: 980px; margin-inline: auto; }
+    .notes-section h2 { margin-top: 3rem; padding-bottom: .4rem; border-bottom: 1px solid #ddd; }
+    .notes-section h3 { margin-top: 2rem; }
+    .notes-section p, .notes-section li { line-height: 1.7; }
+    .notes-section li + li { margin-top: .45rem; }
+    .math-block { margin: 1rem 0; padding: 1rem 1.25rem; overflow-x: auto; background: #f7f7f7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.7; text-align: center; }
+    .flow-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1.25rem 0; }
+    .flow-card { padding: 1rem; border: 1px solid #d7d7d7; border-radius: 8px; background: #fafafa; }
+    .flow-card h4 { margin: 0 0 .8rem; }
+    .flow-line { display: flex; align-items: center; justify-content: center; gap: .5rem; flex-wrap: wrap; margin: .7rem 0; }
+    .flow-node { padding: .55rem .75rem; border: 1px solid #bbb; border-radius: 6px; background: #fff; text-align: center; }
+    .flow-node.policy { background: #fff4c2; }
+    .flow-node.model { background: #eaf3ff; }
+    .flow-node.signal { background: #eaf8ec; }
+    .arrow { color: #777; font-weight: 700; }
+    .architecture { margin: 1.25rem 0; padding: 1.25rem; border: 1px solid #d7d7d7; border-radius: 8px; background: #fafafa; }
+    .architecture-row { display: flex; align-items: center; justify-content: center; gap: .55rem; flex-wrap: wrap; margin: .75rem 0; }
+    .timeline { margin: 1rem 0; padding: 1rem; overflow-x: auto; white-space: pre; background: #f7f7f7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.6; }
+    .note-box { margin: 1.25rem 0; padding: 1rem 1.25rem; border-left: 4px solid #d6a400; background: #fff9df; }
+    .notes-section table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; }
+    .notes-section th, .notes-section td { padding: .7rem; border: 1px solid #ddd; text-align: left; vertical-align: top; }
+    .notes-section th { background: #f5f5f5; }
+    @media (max-width: 760px) { .flow-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="notes-header">
+      <p><a href="notes.html">&larr; Tech Blog</a></p>
+      <h1>LLM Post-Training</h1>
+    </header>
+
+    <section class="notes-section">
+      <h3>SFT vs. RL: what's actually different</h3>
+      <p>The cleanest way to distinguish them is by asking which distribution generates the training samples, and which direction of KL divergence gets minimized.</p>
+      <ul>
+        <li><strong>SFT</strong> trains on samples y drawn from a fixed data distribution. Minimizing the standard cross-entropy loss −log π<sub>θ</sub>(y|x) is equivalent to minimizing the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>). SFT asks: what does the data distribution produce, and does the model cover it?</li>
+        <li><strong>RL</strong> trains on samples y drawn from the policy itself, which a reward model then scores. KL-regularized RL corresponds to minimizing the <em>reverse</em> KL divergence D<sub>KL</sub>(π<sub>θ</sub> ‖ p*) against a reward-tilted target distribution p*. RL asks: what does the policy currently produce, and is that reasonable under the reward-tilted target?</li>
+      </ul>
+      <div class="note-box"><strong>Memory aid:</strong> SFT = data samples, model scores. RL = model samples, reward scores.</div>
+
+      <h2>PPO, GRPO, and DPO at a glance</h2>
+      <p>In all three methods, the <strong>policy</strong> is the LLM being fine-tuned. The difference is how training examples and learning signals are produced.</p>
+      <div class="flow-grid" aria-label="Comparison of PPO, GRPO, and DPO workflows">
+        <section class="flow-card">
+          <h4>PPO</h4>
+          <div class="flow-line"><span class="flow-node">Prompt</span><span class="arrow">→</span><span class="flow-node policy">Policy generates one answer</span></div>
+          <div class="flow-line"><span class="flow-node model">Reward model scores it</span><span class="arrow">→</span><span class="flow-node model">Value model supplies a baseline</span></div>
+          <div class="flow-line"><span class="flow-node signal">GAE advantages</span><span class="arrow">→</span><span class="flow-node policy">Clipped policy update</span></div>
+          <p><strong>Goal:</strong> maximize reward while penalizing drift from the reference model.</p>
+        </section>
+        <section class="flow-card">
+          <h4>GRPO</h4>
+          <div class="flow-line"><span class="flow-node">Prompt</span><span class="arrow">→</span><span class="flow-node policy">Generate a group of answers</span></div>
+          <div class="flow-line"><span class="flow-node model">Score every answer</span><span class="arrow">→</span><span class="flow-node model">Compare within the group</span></div>
+          <div class="flow-line"><span class="flow-node signal">Group-relative advantages</span><span class="arrow">→</span><span class="flow-node policy">Clipped policy update</span></div>
+          <p><strong>Key difference:</strong> the group average replaces the learned value-model baseline.</p>
+        </section>
+        <section class="flow-card">
+          <h4>DPO</h4>
+          <div class="flow-line"><span class="flow-node">Prompt</span><span class="arrow">→</span><span class="flow-node signal">Chosen + rejected answers</span></div>
+          <div class="flow-line"><span class="flow-node model">Compare policy/reference log-ratios</span><span class="arrow">→</span><span class="flow-node policy">Direct preference update</span></div>
+          <p><strong>Goal:</strong> make P(chosen answer) &gt; P(rejected answer), relative to a reference model.</p>
+          <p>No separately trained reward model or value model is required during optimization.</p>
+        </section>
+      </div>
+
+      <h3>PPO: building the loss layer by layer</h3>
+      <p>It's easiest to understand PPO's objective as a sequence of small fixes layered on top of the plain policy-gradient loss, each addressing a specific failure mode of the previous version.</p>
+      <p><strong>Step 1.</strong> Start from loss = −advantage × log_prob(generated answer). If advantage &gt; 0, minimizing the loss increases the log-probability of that answer &mdash; the model becomes more likely to generate it. If advantage &lt; 0, the reverse. Advantage controls the direction and strength of every update.</p>
+      <p><strong>Step 2.</strong> The problem with using log_prob(answer) directly is that if you update the model too aggressively in one step, the probability can change drastically and destroy prior knowledge. So instead, track the probability <em>ratio</em> between the new and old policy: ρ = p<sub>new</sub>(answer)/p<sub>old</sub>(answer) = exp(log p<sub>new</sub> − log p<sub>old</sub>). The loss becomes −advantage × ρ. If ρ = 1 the new model behaves exactly like the old one; if ρ = 1.2, it's 20% more likely to generate that answer than before.</p>
+      <p><strong>Step 3.</strong> Add clipping to prevent destructive updates. PPO computes two candidate losses and takes the worse one (the max, which corresponds to the pessimistic/min objective on reward): Loss<sub>1</sub> = −advantage × ρ, and Loss<sub>2</sub> = −advantage × clip(ρ, 1−ε, 1+ε). Final Policy Loss = max(Loss<sub>1</sub>, Loss<sub>2</sub>). The practical effect is easiest to see as a small table:</p>
+      <table>
+        <thead><tr><th>Advantage</th><th>Ratio condition</th><th>Meaning</th><th>Policy gradient?</th></tr></thead>
+        <tbody>
+          <tr><td>Â &gt; 0</td><td>ρ &gt; 1+ε</td><td>Good action already increased too much</td><td>zero</td></tr>
+          <tr><td>Â &gt; 0</td><td>ρ not too high</td><td>Good action can still be increased</td><td>nonzero</td></tr>
+          <tr><td>Â &lt; 0</td><td>ρ &lt; 1−ε</td><td>Bad action already decreased too much</td><td>zero</td></tr>
+          <tr><td>Â &lt; 0</td><td>ρ not too low</td><td>Bad action can still be decreased</td><td>nonzero</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Step 4.</strong> Combine the clipped policy loss with a KL penalty against the reference model to bound overall drift: Loss = max(−A×ρ, −A×clip(ρ, 1−ε, 1+ε)) + KL penalty. This needs four models in play at once &mdash; policy, reference, reward, and value.</p>
+
+      <h3>The four-model PPO data flow</h3>
+      <div class="architecture" aria-label="PPO architecture and data flow">
+        <div class="architecture-row"><span class="flow-node">Prompt q</span><span class="arrow">→</span><span class="flow-node policy">Policy model π<sub>θ</sub></span><span class="arrow">→</span><span class="flow-node">Generated response o</span></div>
+        <div class="architecture-row"><span class="flow-node">Response o</span><span class="arrow">→</span><span class="flow-node model">Reference model π<sub>ref</sub></span><span class="arrow">→</span><span class="flow-node signal">Token-level KL penalties</span></div>
+        <div class="architecture-row"><span class="flow-node">Response o</span><span class="arrow">→</span><span class="flow-node model">Reward model</span><span class="arrow">→</span><span class="flow-node signal">Final scalar reward</span></div>
+        <div class="architecture-row"><span class="flow-node">Every token prefix s<sub>t</sub></span><span class="arrow">→</span><span class="flow-node model">Value model V(s<sub>t</sub>)</span><span class="arrow">→</span><span class="flow-node signal">Per-token value predictions</span></div>
+        <div class="architecture-row"><span class="flow-node signal">KL-adjusted token rewards r<sub>t</sub></span><span class="arrow">+</span><span class="flow-node signal">Values V(s<sub>t</sub>)</span><span class="arrow">→</span><span class="flow-node">GAE</span><span class="arrow">→</span><span class="flow-node policy">Advantages Â<sub>t</sub></span></div>
+      </div>
+
+      <h3>What the value model is and how it is trained</h3>
+      <p>The value model is the baseline for reward. A reward number for one prompt is difficult to interpret without an estimate of what reward was expected. PPO therefore computes advantage as the realized or estimated return minus the value-model prediction.</p>
+      <div class="math-block">advantage = return − value-model prediction</div>
+      <p>The value model is trained during PPO together with the policy model. It learns to predict the <strong>expected future KL-penalized reward from every token position</strong>. Architecturally, it is commonly a policy-like transformer with a scalar value head that produces V(s<sub>1</sub>), V(s<sub>2</sub>), …, V(s<sub>T</sub>) rather than vocabulary logits.</p>
+
+      <h3>Sequence-level reward versus token-level PPO updates</h3>
+      <p>Since PPO updates the policy at the <em>token</em> level but a scalar reward typically only exists at the sequence level, it needs a token-level advantage for every position. That's exactly what the value model and GAE are for &mdash; see <a href="rl-foundation.html">RL Foundation</a> for the full derivation.</p>
+      <div class="timeline" aria-label="Sequence reward and token-level advantages">Prompt + generated answer ─────────────────────────────→ final reward score = 0.8
+
+token 1        token 2        token 3        ···        token T
+   │              │              │                         │
+   ▼              ▼              ▼                         ▼
+  A₁             A₂             A₃                        A_T
+
+Question for every token: Did this token contribute to a better-than-expected final answer?</div>
+      <p>In many RLHF settings, most tokens receive no external task reward. Instead, each token may receive a KL penalty, while the reward-model score arrives at the final token:</p>
+      <div class="math-block">r<sub>1</sub> = −β KL<sub>1</sub>, &nbsp; r<sub>2</sub> = −β KL<sub>2</sub>, &nbsp; …, &nbsp; r<sub>T</sub> = reward_model_score − β KL<sub>T</sub></div>
+      <p>The direct Monte Carlo return from token t is:</p>
+      <div class="math-block">R<sub>t</sub> = r<sub>t</sub> + γr<sub>t+1</sub> + γ<sup>2</sup>r<sub>t+2</sub> + ⋯ + γ<sup>T−t</sup>r<sub>T</sub></div>
+      <p>and the Monte Carlo return advantage is:</p>
+      <div class="math-block">Â<sub>t</sub><sup>MC</sup> = R<sub>t</sub> − V(s<sub>t</sub>)</div>
+
+      <h3>Why GAE is needed</h3>
+      <p>GAE converts sparse or final rewards into smoother token-level advantage estimates. Instead of relying only on the full Monte Carlo return, it starts from the one-step TD residual:</p>
+      <div class="math-block">δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)</div>
+      <p>The TD residual is itself a one-step advantage estimate:</p>
+      <div class="math-block">Â<sub>t</sub><sup>(1)</sup> = δ<sub>t</sub></div>
+      <p>An n-step advantage can be expressed as a discounted sum of one-step TD residuals:</p>
+      <div class="math-block">Â<sub>t</sub><sup>(n)</sup> = Σ<sub>l=0</sub><sup>n−1</sup> γ<sup>l</sup>δ<sub>t+l</sub></div>
+      <p>GAE uses a λ-weighted combination of multi-step advantages:</p>
+      <div class="math-block">Â<sub>t</sub><sup>GAE(γ,λ)</sup> = δ<sub>t</sub> + (γλ)δ<sub>t+1</sub> + (γλ)<sup>2</sup>δ<sub>t+2</sub> + ⋯ + (γλ)<sup>T−t</sup>δ<sub>T</sub></div>
+      <div class="math-block">Â<sub>t</sub><sup>GAE(γ,λ)</sup> = Σ<sub>l=0</sub><sup>T−t</sup>(γλ)<sup>l</sup>δ<sub>t+l</sub>, &nbsp; λ ∈ [0,1]</div>
+      <p>GAE propagates the final reward signal backward to earlier tokens while using the value model to reduce noise. Monte Carlo uses the true accumulated token rewards; GAE mixes observed token rewards with bootstrapped value estimates.</p>
+
+      <h3>Estimator comparison</h3>
+      <p>Framed as a single lookup table, four estimators trade off differently:</p>
+      <table>
+        <thead><tr><th>Framework</th><th>Target Q<sub>t</sub></th><th>Critic baseline V(s<sub>t</sub>)</th><th>Advantage A<sub>t</sub></th></tr></thead>
+        <tbody>
+          <tr><td>1-step TD / TD(0)</td><td>r<sub>t</sub> + γV(s<sub>t+1</sub>)</td><td>V(s<sub>t</sub>)</td><td>r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>) &nbsp;(= δ<sub>t</sub>)</td></tr>
+          <tr><td>2-step TD</td><td>r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;V(s<sub>t+2</sub>)</td><td>V(s<sub>t</sub>)</td><td>r<sub>t</sub> + γr<sub>t+1</sub> + γ&sup2;V(s<sub>t+2</sub>) − V(s<sub>t</sub>)</td></tr>
+          <tr><td>Monte Carlo / TD(1)</td><td>Σ<sub>k=t</sub><sup>T</sup> γ<sup>k−t</sup>r<sub>k</sub> = γ<sup>T−t</sup>r<sub>T</sub></td><td>V(s<sub>t</sub>)</td><td>γ<sup>T−t</sup>r<sub>T</sub> − V(s<sub>t</sub>)</td></tr>
+          <tr><td>GAE (0 ≤ λ &lt; 1)</td><td>V(s<sub>t</sub>) + Â<sub>t</sub><sup>GAE</sup></td><td>V(s<sub>t</sub>)</td><td>Σ<sub>l=0</sub><sup>T−t−1</sup> (γλ)<sup>l</sup>δ<sub>t+l</sub></td></tr>
+        </tbody>
+      </table>
+      <p>This maps onto two concrete training strategies. A pure Monte Carlo strategy scales the policy gradient using Â = γ<sup>T−t</sup>r<sub>T</sub> − V(s<sub>t</sub>), where every single token inherits the same sequence-level blame or praise, and trains the critic by minimizing MSE directly against the full empirical outcome &mdash; zero bias, but extreme variance, since trajectory fluctuations heavily destabilize the gradient. A GAE strategy scales the policy gradient smoothly using Â<sup>GAE</sup>, where the late-stage penalty or reward echo decays exponentially by (γλ)<sup>l</sup>, and trains the critic against the GAE-bootstrapped value targets instead &mdash; balanced variance (intermediate critic anchors intercept noise), at the cost of some controlled bias if the critic network is still undertrained.</p>
+
+      <h2>Policy gradient: from reward objective to parameter update</h2>
+      <p>The state-value function V<sup>π</sup>(s) is the average return expected from state s. That expectation averages over actions: multiply each action's probability by its expected future return and sum over actions.</p>
+      <div class="math-block">V<sup>π</sup>(s) = E<sub>a∼π</sub>[Q<sup>π</sup>(s,a)] = Σ<sub>a∈A</sub>π(a|s)Q<sup>π</sup>(s,a)</div>
+      <p>The reward objective is:</p>
+      <div class="math-block">J(θ) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)V<sup>π</sup>(s) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>π<sub>θ</sub>(a|s)Q<sup>π</sup>(s,a)</div>
+      <p>Here d<sup>π</sup>(s) is the on-policy state distribution: the probability of visiting state s while following π<sub>θ</sub>. The policy-gradient theorem rewrites the gradient as:</p>
+      <div class="math-block">∇<sub>θ</sub>J(θ) ∝ Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>Q<sup>π</sup>(s,a)∇<sub>θ</sub>π<sub>θ</sub>(a|s)</div>
+      <div class="math-block">∇<sub>θ</sub>J(θ) = E<sub>s∼d<sup>π</sup>, a∼π<sub>θ</sub></sub>[Q<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
+      <p>Replacing Q with advantage gives:</p>
+      <div class="math-block">A<sup>π</sup>(s,a) = Q<sup>π</sup>(s,a) − V<sup>π</sup>(s)</div>
+      <div class="math-block">∇<sub>θ</sub>J(θ) = E[A<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
+      <p>More concretely, a sampled gradient contribution is:</p>
+      <div class="math-block">ĝ<sub>t</sub> = Â<sub>t</sub>∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)</div>
+      <p>The fundamental Monte Carlo policy-gradient update can also be written:</p>
+      <div class="math-block">θ<sub>t+1</sub> = θ<sub>t</sub> + α∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)G<sub>t</sub></div>
+      <ul>
+        <li>θ: the policy-network parameters.</li>
+        <li>α: the learning rate.</li>
+        <li>∇log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>): the direction that increases the sampled action's log-probability.</li>
+        <li>G<sub>t</sub>: the cumulative discounted return from time t to the end of the trajectory.</li>
+      </ul>
+
+      <h3>Policy gradient versus the gradient-descent optimizer</h3>
+      <p>These are different layers of the training procedure:</p>
+      <ul>
+        <li><strong>The policy-gradient algorithm</strong> defines the objective, how reward or advantage is computed, and how policy movement is constrained.</li>
+        <li><strong>The optimizer</strong> receives the resulting gradient and decides how to scale it and update the parameters. PPO and GRPO typically use Adam or AdamW underneath.</li>
+      </ul>
+      <div class="flow-grid" aria-label="Supervised learning and policy-gradient learning comparison">
+        <section class="flow-card">
+          <h4>Supervised learning</h4>
+          <div class="flow-line"><span class="flow-node">Known label</span><span class="arrow">→</span><span class="flow-node">Cross-entropy loss</span><span class="arrow">→</span><span class="flow-node signal">Direct gradient</span></div>
+          <div class="math-block">θ ← θ − learning_rate × ∇<sub>θ</sub>loss</div>
+        </section>
+        <section class="flow-card">
+          <h4>RL / policy gradient</h4>
+          <div class="flow-line"><span class="flow-node policy">Policy samples a discrete action</span><span class="arrow">→</span><span class="flow-node model">Environment or reward model scores it</span></div>
+          <p>The reward is not directly differentiable through discrete sampling, so the update increases probabilities of actions with positive advantage and decreases probabilities of actions with negative advantage.</p>
+          <div class="math-block">gradient ≈ advantage × ∇<sub>θ</sub>log π<sub>θ</sub>(action|state)</div>
+        </section>
+      </div>
+
+      <h3>What varies across policy-gradient algorithms?</h3>
+      <table>
+        <thead><tr><th>Difference</th><th>Meaning</th><th>Examples</th></tr></thead>
+        <tbody>
+          <tr><td>Reward source</td><td>Where reward comes from</td><td>Reward model, verifier, human feedback, rule reward</td></tr>
+          <tr><td>Baseline / advantage</td><td>How “better than expected” is measured</td><td>Value model, group mean, no baseline</td></tr>
+          <tr><td>Policy constraint</td><td>How overly large updates are prevented</td><td>KL constraint, clipping, trust region</td></tr>
+          <tr><td>Data collection</td><td>Online versus offline; one sample versus many</td><td>PPO rollouts, GRPO group samples</td></tr>
+          <tr><td>Critic usage</td><td>Whether a value model is trained</td><td>PPO usually yes; GRPO no</td></tr>
+          <tr><td>Loss shape</td><td>The exact objective used for the gradient</td><td>Vanilla policy gradient, PPO clipped loss, TRPO constrained objective</td></tr>
+        </tbody>
+      </table>
+      <p>For an LLM, the action is the generated token, the state is the prompt plus previous tokens, and the policy is the next-token distribution.</p>
+
+      <h3>Adam versus AdamW</h3>
+      <p>The standard adaptive-optimizer update can be summarized as:</p>
+      <div class="math-block">θ<sub>t</sub> = θ<sub>t−1</sub> − γ(m̂<sub>t</sub> / (√v̂<sub>t</sub> + ε)) − ηλθ<sub>t−1</sub></div>
+      <ul>
+        <li>θ<sub>t</sub>: model parameters.</li>
+        <li>γ: learning rate.</li>
+        <li>m̂<sub>t</sub> and v̂<sub>t</sub>: bias-corrected moving averages of gradients and squared gradients.</li>
+        <li>ε: a small smoothing term that prevents division by zero.</li>
+        <li>λ: weight-decay rate.</li>
+        <li>η: schedule multiplier.</li>
+      </ul>
+      <p>In Adam, L2 regularization is mixed into the gradient moments. In AdamW, weight decay is decoupled and subtracted directly from the weights, so decay does not depend on the gradient's history.</p>
+
+      <h2>Which LLM parameters can PPO or GRPO update?</h2>
+      <div class="architecture" aria-label="Trainable LLM parameter stack">
+        <div class="architecture-row"><span class="flow-node">Embedding layer</span><span class="arrow">→</span><span class="flow-node model">Transformer blocks 1…N</span><span class="arrow">→</span><span class="flow-node policy">LM head</span></div>
+        <div class="architecture-row"><span class="flow-node">Attention: q_proj, k_proj, v_proj, o_proj</span><span class="flow-node">MLP: gate_proj, up_proj, down_proj</span><span class="flow-node">LayerNorm weights</span></div>
+      </div>
+      <p>Depending on whether training is full-parameter or adapter-based, PPO/GRPO can update token embeddings, attention weights W<sub>q</sub>, W<sub>k</sub>, W<sub>v</sub>, W<sub>o</sub>, MLP/feed-forward weights, LayerNorm weights, and the output/LM head.</p>
+      <table>
+        <thead><tr><th>Layer updated</th><th>Main effect</th><th>Simple intuition</th><th>Risk</th></tr></thead>
+        <tbody>
+          <tr><td>Embedding</td><td>Changes token representations</td><td>Change the dictionary</td><td>Can disturb basic language representation</td></tr>
+          <tr><td>Attention</td><td>Changes what context the model focuses on</td><td>Change focus</td><td>Can affect instruction-following and context use</td></tr>
+          <tr><td>MLP</td><td>Changes internal reasoning and behavior patterns</td><td>Change thinking</td><td>Strong behavior change; possible overfitting</td></tr>
+          <tr><td>LayerNorm</td><td>Changes activation scaling</td><td>Change signal strength</td><td>Usually a smaller effect</td></tr>
+          <tr><td>LM head</td><td>Changes final token probabilities</td><td>Change word choice</td><td>May be shallow if deeper logic is wrong</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Why PPO?</h3>
+      <p>PPO is a policy-gradient algorithm used in RLHF to train an LLM safely and efficiently.</p>
+      <ul>
+        <li>It allows stable, constrained updates.</li>
+        <li>Clipping avoids drastic policy changes that could hurt performance.</li>
+        <li>It helps balance exploration (trying new responses) and exploitation (using behavior known to work).</li>
+        <li>For LLMs, PPO updates the language-model policy to prefer outputs that the reward model scores more highly.</li>
+        <li>Its intended behavioral goals can include reducing toxicity, improving helpfulness, and reducing hallucination.</li>
+      </ul>
+
+      <h3>DPO: skipping the reward model entirely</h3>
+      <p>DPO doesn't need extra scoring data. It works directly from a chosen response y<sub>w</sub> and a rejected response y<sub>l</sub>, and maximizes the reward model's implicit scoring gap between them:</p>
+      <p>L<sub>DPO</sub>(π<sub>θ</sub>; π<sub>ref</sub>) = −E<sub>(x,yw,yl)~D</sub>[log σ(β log(π<sub>θ</sub>(y<sub>w</sub>|x)/π<sub>ref</sub>(y<sub>w</sub>|x)) − β log(π<sub>θ</sub>(y<sub>l</sub>|x)/π<sub>ref</sub>(y<sub>l</sub>|x)))]</p>
+      <p>Walking through what minimizing this actually does: it's equivalent to maximizing the implicit rewards r<sub>w</sub> = log(π<sub>θ</sub>(y<sub>w</sub>|x)/π<sub>ref</sub>(y<sub>w</sub>|x)) and r<sub>l</sub> = log(π<sub>ref</sub>(y<sub>l</sub>|x)/π<sub>θ</sub>(y<sub>l</sub>|x)). For the preferred outcome y<sub>w</sub>, we want π<sub>θ</sub>(y<sub>w</sub>|x) to grow; for the dispreferred outcome y<sub>l</sub>, we want it to shrink. And the gradient adapts to how wrong the reference model already was: if π<sub>ref</sub>(y<sub>w</sub>|x) was small, meaning the reference model failed to favor the good response, r<sub>w</sub>'s coefficient becomes large; if π<sub>ref</sub>(y<sub>l</sub>|x) was large, meaning the reference model failed to disfavor the bad response, r<sub>l</sub>'s coefficient becomes large too. In short, DPO pushes hardest exactly where the reference model's preferences were most wrong &mdash; without ever training a separate reward or value model.</p>
+
+      <h3>GRPO: trading the value model for group statistics</h3>
+      <p>GRPO keeps PPO's clipped-ratio structure but removes the value model altogether. Instead of a learned baseline, it samples several responses to the same prompt and uses the group's own average reward as the baseline:</p>
+      <p>advantage = reward − group average reward</p>
+      <p>This sidesteps the memory and compute cost of training a separate critic, and the difficulty of accurately predicting token-prefix values for long LLM outputs &mdash; but it also means GRPO's advantage estimate is only as good as the diversity of the sampled group, which is exactly the property its later variants (DAPO among them) end up having to patch.</p>
+
+      <h3>DAPO: patching GRPO's four failure modes</h3>
+      <p>DAPO doesn't propose a new objective from scratch; it's a set of four targeted fixes to specific ways vanilla GRPO breaks down in practice, especially on long chain-of-thought training.</p>
+      <p><strong>1. Clip-Higher &mdash; decoupling the clip bounds.</strong> PPO/GRPO's traditional clipping range is symmetric: ρ<sub>t</sub> ∈ [1−ε, 1+ε] (e.g. [0.8, 1.2] at ε=0.2). That symmetry quietly caps how fast the model can reinforce rare-but-correct behavior: a rare, correct reasoning token with probability 0.01 under the old model can, even inside a fully correct response, only be pushed up to 0.01 × 1.2 = 0.012 in one update. The model therefore struggles to quickly reinforce newly discovered reasoning patterns, increasingly falls back on already-high-probability patterns, and can suffer entropy collapse or reduced exploration. DAPO decouples the bounds &mdash; ρ<sub>t</sub> ∈ [1−ε<sub>low</sub>, 1+ε<sub>high</sub>] with ε<sub>high</sub> &gt; ε<sub>low</sub> (e.g. 0.2 and 0.28, giving [0.8, 1.28]) &mdash; so the model stays cautious about suppressing existing behavior but is allowed a bigger jump when reinforcing a newly discovered correct one.</p>
+      <p><strong>2. Dynamic Sampling &mdash; don't waste compute on zero-gradient groups.</strong> GRPO's advantage depends entirely on reward variation within a group of sampled responses to the same prompt. If all G responses to a prompt are correct (R<sub>1</sub>=&hellip;=R<sub>G</sub>=1) or all wrong (R<sub>1</sub>=&hellip;=R<sub>G</sub>=−1), every response's reward equals the group average, so every advantage is exactly zero and the group produces no usable policy gradient. As training progresses the model masters more and more easy prompts, so more and more groups collapse to accuracy=0 or accuracy=1, quietly wasting generation compute and shrinking the effective batch size. DAPO filters to keep only prompts with 0 &lt; accuracy &lt; 1 (some correct, some incorrect among the G samples), and keeps sampling fresh prompts until the batch is filled back up. The intuition: don't spend training signal on prompts the model has already mastered or still can't touch at all &mdash; spend it on prompts right at the model's current capability boundary, where some rollouts succeed and some fail.</p>
+      <p><strong>3. Token-level policy gradient loss &mdash; stop underweighting long responses.</strong> Vanilla GRPO averages token loss within each response first, then averages across responses, so every response gets equal total weight regardless of length: L<sub>i</sub> = (1/|o<sub>i</sub>|) Σ<sub>t</sub> L<sub>i,t</sub>, then L<sub>GRPO</sub> = (1/G) Σ<sub>i</sub> L<sub>i</sub>. Concretely, if response A is 100 tokens and response B is 1,000 tokens, each gets ~50% of the total weight under response-level averaging &mdash; so each individual token in the short response ends up carrying roughly 10× the weight of each token in the long one. In long chain-of-thought training this causes two real problems: correct reasoning steps inside long correct answers get under-reinforced, and repetition, errors, and wasted reasoning inside long wrong answers get under-penalized. DAPO instead averages uniformly over every valid token in the whole training batch: L<sub>DAPO</sub> = Σ<sub>i</sub>Σ<sub>t</sub> L<sub>i,t</sub> / Σ<sub>i</sub>|o<sub>i</sub>|. With the same 100- vs. 1,000-token example (using a 900-token response B here), token-level weighting gives A ~10% of total weight and B ~90% &mdash; every reasoning token gets a comparable training signal regardless of which response it's in.</p>
+      <p><strong>4. Overlong Reward Shaping &mdash; don't blindly punish truncation.</strong> Generation is capped at some max length (e.g. L<sub>max</sub> = 20,480 tokens); if the model hasn't finished by then, its output is force-truncated. A truncated response isn't necessarily a bad one &mdash; the reasoning so far might be basically correct, the model may simply have been mid-derivation, or the final answer just hadn't been emitted yet. Naively assigning truncated responses a strong negative reward teaches the model that the entire reasoning path was worthless, injecting noise and destabilizing training. DAPO offers two fixes: <em>Overlong Filtering</em>, which masks truncated samples out of the policy-gradient computation entirely rather than treating them as flatly wrong; and <em>Soft Overlong Punishment</em>, which ramps the length penalty up gradually as a response approaches L<sub>max</sub> (using a buffer zone L<sub>cache</sub>) rather than applying a sudden, sharp penalty only once the cap is hit.</p>
+
+      <h2>Loss and advantage functions across post-training algorithms</h2>
+      <p>The PDF closes with a compact comparison of related objectives. The notation below keeps the same information while expressing it as selectable text.</p>
+      <table>
+        <thead><tr><th>Method</th><th>Core loss or policy signal</th><th>Advantage / preference signal</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>PPO</strong></td>
+            <td>L<sub>PPO</sub> = −min[ρ(o)A, clip(ρ(o), 1−ε, 1+ε)A], where ρ(o)=π<sub>θ</sub>(o)/π<sub>old</sub>(o)</td>
+            <td>A is typically computed with GAE from token rewards and a critic/value model.</td>
+          </tr>
+          <tr>
+            <td><strong>GRPO</strong></td>
+            <td>L<sub>GRPO</sub> = −min[ρ(o)A, clip(ρ(o),1−ε,1+ε)A] + βD<sub>KL</sub>(π<sub>θ</sub>‖π<sub>ref</sub>)</td>
+            <td>A<sub>i</sub> = (R(o<sub>i</sub>) − mean{R(o)}) / std{R(o)}</td>
+          </tr>
+          <tr>
+            <td><strong>Dr. GRPO</strong></td>
+            <td>Uses the PPO/GRPO-style clipped policy objective with a decoupled group-relative normalization design.</td>
+            <td>A<sub>i</sub> = R(o<sub>i</sub>) − mean{R(o)}</td>
+          </tr>
+          <tr>
+            <td><strong>DAPO</strong></td>
+            <td>L<sub>DAPO</sub> = −min[ρ(o)A, clip(ρ(o),1−ε<sub>low</sub>,1+ε<sub>high</sub>)A]</td>
+            <td>Group-relative reward advantage, commonly normalized by the group standard deviation.</td>
+          </tr>
+          <tr>
+            <td><strong>GPG</strong></td>
+            <td>L<sub>GPG</sub> = −log π<sub>θ</sub>(o) · A</td>
+            <td>A = α(R(o) − mean{R(o)})</td>
+          </tr>
+          <tr>
+            <td><strong>DPO</strong></td>
+            <td>L<sub>DPO</sub> = −log σ[βlog(π<sub>θ</sub>(o<sub>w</sub>)/π<sub>ref</sub>(o<sub>w</sub>)) − βlog(π<sub>θ</sub>(o<sub>l</sub>)/π<sub>ref</sub>(o<sub>l</sub>))]</td>
+            <td>Pairwise preference advantage between the preferred response o<sub>w</sub> and rejected response o<sub>l</sub>.</td>
+          </tr>
+          <tr>
+            <td><strong>GSPO</strong></td>
+            <td>L<sub>GSPO</sub> = −min[s(o)A, clip(s(o),1−ε,1+ε)A] + βD<sub>KL</sub>(π<sub>θ</sub>‖π<sub>ref</sub>)</td>
+            <td>A<sub>i</sub> = (R(o<sub>i</sub>) − mean{R(o)}) / std{R(o)}, with sequence ratio s(o) = [π<sub>θ</sub>(o)/π<sub>old</sub>(o)]<sup>1/|o|</sup>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <a href="index.html">&larr; Back to home</a>
+    </footer>
+  </main>
+</body>
+</html>
