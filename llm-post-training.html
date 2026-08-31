@@ -29,7 +29,14 @@
     .notes-section table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; }
     .notes-section th, .notes-section td { padding: .7rem; border: 1px solid #ddd; text-align: left; vertical-align: top; }
     .notes-section th { background: #f5f5f5; }
-    @media (max-width: 760px) { .flow-grid { grid-template-columns: 1fr; } }
+    .legend-box { margin: 1rem 0; padding: .85rem 1.1rem; border: 1px dashed #bbb; border-radius: 8px; background: #fbfbfb; font-size: .95rem; }
+    .legend-box ul { margin: .4rem 0 0; padding-left: 1.2rem; }
+    .legend-box li { margin: 0; }
+    .ppo-figure { margin: 1.25rem 0; }
+    .ppo-figure svg { width: 100%; height: auto; display: block; }
+    .panel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
+    .ppo-central { margin: 1rem 0; }
+    @media (max-width: 760px) { .flow-grid { grid-template-columns: 1fr; } .panel-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -40,7 +47,8 @@
     </header>
 
     <section class="notes-section">
-      <h3>SFT vs. RL: what's actually different</h3>
+      <div class="note-box"><strong>One-line summary:</strong> SFT minimizes the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>); RL minimizes the <em>reverse</em> KL divergence D<sub>KL</sub>(π<sub>θ</sub> ‖ p*).</div>
+      <h2>1. SFT vs. RL: what's actually different</h2>
       <p>The cleanest way to distinguish them is by asking which distribution generates the training samples, and which direction of KL divergence gets minimized.</p>
       <ul>
         <li><strong>SFT</strong> trains on samples y drawn from a fixed data distribution. Minimizing the standard cross-entropy loss −log π<sub>θ</sub>(y|x) is equivalent to minimizing the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>). SFT asks: what does the data distribution produce, and does the model cover it?</li>
@@ -48,8 +56,105 @@
       </ul>
       <div class="note-box"><strong>Memory aid:</strong> SFT = data samples, model scores. RL = model samples, reward scores.</div>
 
-      <h2>PPO, GRPO, and DPO at a glance</h2>
-      <p>In all three methods, the <strong>policy</strong> is the LLM being fine-tuned. The difference is how training examples and learning signals are produced.</p>
+      <h2>2. Policy gradient: from reward objective to parameter update</h2>
+      <div class="note-box"><strong>Reward function, following Lilian Weng's formula:</strong> the state-value function V<sup>π</sup>(s) represents the average reward you expect to get from state s. To find that average, you multiply the probability of taking an action by the payoff of that action, and sum them up.</div>
+      <p>The state-value function V<sup>π</sup>(s) is the average return expected from state s. That expectation averages over actions: multiply each action's probability by its expected future return and sum over actions.</p>
+      <div class="math-block">V<sup>π</sup>(s) = E<sub>a∼π</sub>[Q<sup>π</sup>(s,a)] = Σ<sub>a∈A</sub>π(a|s)Q<sup>π</sup>(s,a)</div>
+      <p>The reward objective is:</p>
+      <div class="math-block">J(θ) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)V<sup>π</sup>(s) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>π<sub>θ</sub>(a|s)Q<sup>π</sup>(s,a)</div>
+      <p>Here d<sup>π</sup>(s) is the stationary distribution of the Markov chain for π<sub>θ</sub> &mdash; the on-policy state distribution under π: the probability of visiting state s while following π<sub>θ</sub>. (For simplicity, the parameter θ is often omitted from the subscript of π, d, and Q when the policy π is already present elsewhere in the expression &mdash; e.g. d<sup>π</sup> and Q<sup>π</sup> should be read as d<sup>π<sub>θ</sub></sup> and Q<sup>π<sub>θ</sub></sup> if written in full.) The policy-gradient theorem rewrites the gradient as:</p>
+      <div class="math-block">∇<sub>θ</sub>J(θ) ∝ Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>Q<sup>π</sup>(s,a)∇<sub>θ</sub>π<sub>θ</sub>(a|s)</div>
+      <div class="math-block">∇<sub>θ</sub>J(θ) = E<sub>s∼d<sup>π</sup>, a∼π<sub>θ</sub></sub>[Q<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
+      <div class="note-box">The policy-gradient algorithm is, at its core, just using gradient descent to maximize this reward.</div>
+      <p>Replacing Q with advantage gives:</p>
+      <div class="math-block">A<sup>π</sup>(s,a) = Q<sup>π</sup>(s,a) − V<sup>π</sup>(s)</div>
+      <div class="math-block">∇<sub>θ</sub>J(θ) = E[A<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
+      <p>More concretely, a sampled gradient contribution is:</p>
+      <div class="math-block">ĝ<sub>t</sub> = Â<sub>t</sub>∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)</div>
+      <p>The fundamental Monte Carlo policy-gradient update can also be written:</p>
+      <div class="math-block">θ<sub>t+1</sub> = θ<sub>t</sub> + α∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)G<sub>t</sub></div>
+      <ul>
+        <li>θ: the policy-network parameters.</li>
+        <li>α: the learning rate.</li>
+        <li>∇log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>): the direction that increases the sampled action's log-probability.</li>
+        <li>G<sub>t</sub>: the cumulative discounted return from time t to the end of the trajectory.</li>
+      </ul>
+
+      <h3>Policy gradient versus the gradient-descent optimizer</h3>
+      <p>These are different layers of the training procedure. Gradient descent's parameter-update rule tells you, given the gradient, how to update the parameter: w_new = w_old + learning_rate × gradient. Optimizers built on top of gradient descent are mostly concerned with how to scale that gradient and modify the update rule.</p>
+      <ul>
+        <li><strong>The policy-gradient algorithm</strong> defines what loss you optimize and how you compute advantage / constrain policy movement.</li>
+        <li><strong>The optimizer</strong> receives the resulting gradient and decides how to scale it and update the parameters &mdash; you still usually use Adam or AdamW underneath to update weights.</li>
+      </ul>
+      <p>For supervised learning, the loss is directly differentiable:</p>
+      <div class="timeline">Python
+prediction = model(x)
+loss = cross_entropy(prediction, label)
+gradient = ∇θ loss
+θ ← θ - learning_rate * gradient</div>
+      <p>The label is known, and the loss is directly computed.</p>
+      <p>For RL / policy gradient, the problem is harder:</p>
+      <div class="timeline">Python
+policy samples action
+environment/reward model gives reward
+sampled action is discrete
+reward is not directly differentiable through sampling</div>
+      <p>So we need policy gradient:</p>
+      <div class="timeline">increase probability of actions that got good reward
+decrease probability of actions that got bad reward</div>
+      <p>The basic policy-gradient form is:</p>
+      <div class="math-block">gradient ≈ advantage × ∇<sub>θ</sub>log π<sub>θ</sub>(action|state)</div>
+      <p>Redrawn as a side-by-side comparison:</p>
+      <div class="flow-grid" aria-label="Supervised learning and policy-gradient learning comparison">
+        <section class="flow-card">
+          <h4>Supervised learning</h4>
+          <div class="flow-line"><span class="flow-node">Known label</span><span class="arrow">→</span><span class="flow-node">Cross-entropy loss</span><span class="arrow">→</span><span class="flow-node signal">Direct gradient</span></div>
+          <div class="math-block">θ ← θ − learning_rate × ∇<sub>θ</sub>loss</div>
+        </section>
+        <section class="flow-card">
+          <h4>RL / policy gradient</h4>
+          <div class="flow-line"><span class="flow-node policy">Policy samples a discrete action</span><span class="arrow">→</span><span class="flow-node model">Environment or reward model scores it</span></div>
+          <p>The reward is not directly differentiable through discrete sampling, so the update increases probabilities of actions with positive advantage and decreases probabilities of actions with negative advantage.</p>
+          <div class="math-block">gradient ≈ advantage × ∇<sub>θ</sub>log π<sub>θ</sub>(action|state)</div>
+        </section>
+      </div>
+
+      <h3>What varies across policy-gradient algorithms?</h3>
+      <table>
+        <thead><tr><th>Difference</th><th>Meaning</th><th>Examples</th></tr></thead>
+        <tbody>
+          <tr><td>Reward source</td><td>Where reward comes from</td><td>Reward model, verifier, human feedback, rule reward</td></tr>
+          <tr><td>Baseline / advantage</td><td>How “better than expected” is measured</td><td>Value model, group mean, no baseline</td></tr>
+          <tr><td>Policy constraint</td><td>How overly large updates are prevented</td><td>KL constraint, clipping, trust region</td></tr>
+          <tr><td>Data collection</td><td>Online versus offline; one sample versus many</td><td>PPO rollouts, GRPO group samples</td></tr>
+          <tr><td>Critic usage</td><td>Whether a value model is trained</td><td>PPO usually yes; GRPO no</td></tr>
+          <tr><td>Loss shape</td><td>The exact objective used for the gradient</td><td>Vanilla policy gradient, PPO clipped loss, TRPO constrained objective</td></tr>
+        </tbody>
+      </table>
+      <p>For LLMs:</p>
+      <div class="timeline">action = generated token
+state = prompt + previous tokens
+policy = LLM next-token distribution</div>
+
+      <h3>Adam versus AdamW</h3>
+      <p>The standard adaptive-optimizer update can be summarized as:</p>
+      <div class="math-block">θ<sub>t</sub> = θ<sub>t−1</sub> − γ(m̂<sub>t</sub> / (√v̂<sub>t</sub> + ε)) − ηλθ<sub>t−1</sub></div>
+      <ul>
+        <li>θ<sub>t</sub>: model parameters.</li>
+        <li>γ: learning rate.</li>
+        <li>m̂<sub>t</sub> and v̂<sub>t</sub>: bias-corrected moving averages of gradients and squared gradients.</li>
+        <li>ε: a small smoothing term that prevents division by zero.</li>
+        <li>λ: weight-decay rate.</li>
+        <li>η: schedule multiplier.</li>
+      </ul>
+      <p>In Adam, L2 regularization is mixed into the gradient moments. In AdamW, weight decay is decoupled and subtracted directly from the weights, so decay does not depend on the gradient's history.</p>
+
+      <h2>3. PPO, GRPO, and DPO at a glance</h2>
+      <p>In all three methods, the <strong>policy</strong> is the LLM model we are fine-tuning. The difference is how training examples and learning signals are produced.</p>
+      <p><strong>PPO.</strong> Given a prompt, the current policy model generates an answer, the reward model scores that answer, and PPO updates the policy to get higher reward. The loss maximizes reward, minus a KL penalty from the reference model, minus the expected reward from the value model.</p>
+      <p><strong>GRPO.</strong> Given a prompt, generate multiple answers (answer 1, answer 2, answer 3, answer 4, &hellip;), score each answer, compare within the group, then do the RL update.</p>
+      <p><strong>DPO.</strong> Each prompt comes with a chosen answer and a rejected answer. Use the chosen/rejected data to directly optimize preference, so that P(chosen answer) &gt; P(rejected answer), relative to a reference model.</p>
+      <p>Redrawn as a side-by-side comparison:</p>
       <div class="flow-grid" aria-label="Comparison of PPO, GRPO, and DPO workflows">
         <section class="flow-card">
           <h4>PPO</h4>
@@ -91,21 +196,272 @@
       <p><strong>Step 4.</strong> Combine the clipped policy loss with a KL penalty against the reference model to bound overall drift: Loss = max(−A×ρ, −A×clip(ρ, 1−ε, 1+ε)) + KL penalty. This needs four models in play at once &mdash; policy, reference, reward, and value.</p>
 
       <h3>The four-model PPO data flow</h3>
-      <div class="architecture" aria-label="PPO architecture and data flow">
-        <div class="architecture-row"><span class="flow-node">Prompt q</span><span class="arrow">→</span><span class="flow-node policy">Policy model π<sub>θ</sub></span><span class="arrow">→</span><span class="flow-node">Generated response o</span></div>
-        <div class="architecture-row"><span class="flow-node">Response o</span><span class="arrow">→</span><span class="flow-node model">Reference model π<sub>ref</sub></span><span class="arrow">→</span><span class="flow-node signal">Token-level KL penalties</span></div>
-        <div class="architecture-row"><span class="flow-node">Response o</span><span class="arrow">→</span><span class="flow-node model">Reward model</span><span class="arrow">→</span><span class="flow-node signal">Final scalar reward</span></div>
-        <div class="architecture-row"><span class="flow-node">Every token prefix s<sub>t</sub></span><span class="arrow">→</span><span class="flow-node model">Value model V(s<sub>t</sub>)</span><span class="arrow">→</span><span class="flow-node signal">Per-token value predictions</span></div>
-        <div class="architecture-row"><span class="flow-node signal">KL-adjusted token rewards r<sub>t</sub></span><span class="arrow">+</span><span class="flow-node signal">Values V(s<sub>t</sub>)</span><span class="arrow">→</span><span class="flow-node">GAE</span><span class="arrow">→</span><span class="flow-node policy">Advantages Â<sub>t</sub></span></div>
+      <p>Four models run at once during PPO training: the policy model being trained, a frozen reference model, a reward model, and a value model. Each plays a distinct role in turning one prompt into per-token advantages.</p>
+      <div class="legend-box" aria-label="Notation legend">
+        <strong>Notation used in the figure:</strong>
+        <ul>
+          <li>A<sub>i</sub> — Token i</li>
+          <li>R<sub>i+1</sub> — Reward of Action i</li>
+          <li>R̃<sub>i+1</sub> — Virtual Reward of Action i (the KL-shaped per-token reward)</li>
+          <li>V<sub>i</sub> — Expected Return of S<sub>i</sub></li>
+          <li>P<sub>i</sub> — output token distribution at position i (compared via KL)</li>
+        </ul>
       </div>
+      <figure class="ppo-figure" aria-label="PPO architecture: four sub-models and the central data flow, redrawn from the PDF">
+        <div class="panel-grid">
+          <!-- Reference Model panel -->
+          <svg viewBox="0 0 680 350" role="img" aria-label="Reference Model panel: the same prompt and tokens are fed to the current policy model and the frozen reference model; the KL divergence between their per-token output distributions produces the virtual rewards">
+            <defs><marker id="ar-ref" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#333"/></marker>
+            <marker id="ar-kl" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto-start-reverse"><path d="M0,0 L7,3.5 L0,7 z" fill="#c0504d"/></marker></defs>
+            <rect x="4" y="4" width="672" height="342" rx="16" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="8 6"/>
+            <text x="26" y="46" font-family="Helvetica,Arial,sans-serif" font-size="24" font-weight="700" fill="#111">Reference Model</text>
+            <!-- legend -->
+            <g font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#111">
+              <rect x="332" y="18" width="34" height="17" fill="#f7ddc0" stroke="#8a6a48"/><text x="349" y="30" text-anchor="middle">Aᵢ</text><text x="374" y="30">: Token i</text>
+              <rect x="332" y="41" width="34" height="17" fill="#f6efc3" stroke="#a89a4f"/><text x="349" y="53" text-anchor="middle">Rᵢ₊₁</text><text x="374" y="53">: Reward of Action i</text>
+              <rect x="332" y="64" width="34" height="17" fill="#f6efc3" stroke="#a89a4f" stroke-dasharray="3 2"/><text x="349" y="76" text-anchor="middle">R̃ᵢ₊₁</text><text x="374" y="76">: Virtual Reward of Action i</text>
+              <rect x="332" y="87" width="34" height="17" fill="#d9e6f6" stroke="#6f8cb3"/><text x="349" y="99" text-anchor="middle">Vᵢ</text><text x="374" y="99">: Expected Return of Sᵢ</text>
+              <rect x="332" y="110" width="34" height="17" fill="#ded9ee" stroke="#7d74a8"/><text x="349" y="122" text-anchor="middle">Pᵢ</text><text x="374" y="122">: Output distribution of token i</text>
+            </g>
+            <!-- left flow: current policy -->
+            <g font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#111">
+              <rect x="28" y="150" width="84" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="70" y="166" text-anchor="middle">Prompt</text>
+              <rect x="122" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="139" y="166" text-anchor="middle">A₁</text>
+              <rect x="162" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="179" y="166" text-anchor="middle">A₂</text>
+              <rect x="202" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="219" y="166" text-anchor="middle">A₃</text>
+              <text x="253" y="167" font-size="14">···</text>
+              <rect x="272" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="289" y="166" text-anchor="middle">Aᵢ</text>
+              <line x1="70" y1="174" x2="70" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="139" y1="174" x2="139" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="179" y1="174" x2="179" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="219" y1="174" x2="219" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="289" y1="174" x2="289" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <rect x="28" y="196" width="278" height="38" rx="10" fill="#e2efdc" stroke="#6b8f6b"/><text x="167" y="220" text-anchor="middle" font-size="14">Policy Model</text>
+              <line x1="90" y1="234" x2="90" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="146" y1="234" x2="146" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="202" y1="234" x2="202" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="276" y1="234" x2="276" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <rect x="72" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="90" y="272" text-anchor="middle">P₁</text>
+              <rect x="128" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="146" y="272" text-anchor="middle">P₂</text>
+              <rect x="184" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="202" y="272" text-anchor="middle">P₃</text>
+              <text x="230" y="273" font-size="14">···</text>
+              <rect x="258" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="276" y="272" text-anchor="middle">Pᵢ</text>
+              <ellipse cx="183" cy="268" rx="128" ry="25" fill="none" stroke="#c0504d" stroke-dasharray="6 4"/>
+            </g>
+            <!-- right flow: reference (old) policy -->
+            <g font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#111">
+              <rect x="368" y="150" width="84" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="410" y="166" text-anchor="middle">Prompt</text>
+              <rect x="462" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="479" y="166" text-anchor="middle">A₁</text>
+              <rect x="502" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="519" y="166" text-anchor="middle">A₂</text>
+              <rect x="542" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="559" y="166" text-anchor="middle">A₃</text>
+              <text x="592" y="167" font-size="14">···</text>
+              <rect x="612" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="629" y="166" text-anchor="middle">Aᵢ</text>
+              <line x1="410" y1="174" x2="410" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="479" y1="174" x2="479" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="519" y1="174" x2="519" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="559" y1="174" x2="559" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="629" y1="174" x2="629" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <rect x="368" y="196" width="278" height="38" rx="10" fill="#e2efdc" stroke="#6b8f6b"/><text x="507" y="220" text-anchor="middle" font-size="13">Ref Model (old Policy Model)</text>
+              <line x1="430" y1="234" x2="430" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="486" y1="234" x2="486" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="542" y1="234" x2="542" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <line x1="616" y1="234" x2="616" y2="254" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ref)"/>
+              <rect x="412" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="430" y="272" text-anchor="middle">P₁</text>
+              <rect x="468" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="486" y="272" text-anchor="middle">P₂</text>
+              <rect x="524" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="542" y="272" text-anchor="middle">P₃</text>
+              <text x="570" y="273" font-size="14">···</text>
+              <rect x="598" y="256" width="36" height="24" fill="#ded9ee" stroke="#7d74a8"/><text x="616" y="272" text-anchor="middle">Pᵢ</text>
+              <ellipse cx="523" cy="268" rx="128" ry="25" fill="none" stroke="#c0504d" stroke-dasharray="6 4"/>
+            </g>
+            <line x1="315" y1="268" x2="391" y2="268" stroke="#c0504d" stroke-width="1.5" stroke-dasharray="6 4" marker-start="url(#ar-kl)" marker-end="url(#ar-kl)"/>
+            <text x="340" y="310" font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#c0504d" text-anchor="middle">Kullback–Leibler (KL) divergence</text>
+          </svg>
+          <!-- Reward Model panel -->
+          <svg viewBox="0 0 680 350" role="img" aria-label="Reward Model panel: LLM-based and BERT-based reward models with a classification head producing a scalar reward">
+            <defs><marker id="ar-rew" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#333"/></marker></defs>
+            <rect x="4" y="4" width="672" height="342" rx="16" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="8 6"/>
+            <text x="26" y="46" font-family="Helvetica,Arial,sans-serif" font-size="24" font-weight="700" fill="#111">Reward Model</text>
+            <g font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#111">
+              <rect x="332" y="18" width="34" height="17" fill="#f7ddc0" stroke="#8a6a48"/><text x="349" y="30" text-anchor="middle">Aᵢ</text><text x="374" y="30">: Token i</text>
+              <rect x="332" y="41" width="34" height="17" fill="#f6efc3" stroke="#a89a4f"/><text x="349" y="53" text-anchor="middle">Rᵢ₊₁</text><text x="374" y="53">: Reward of Action i</text>
+              <rect x="332" y="64" width="34" height="17" fill="#f6efc3" stroke="#a89a4f" stroke-dasharray="3 2"/><text x="349" y="76" text-anchor="middle">R̃ᵢ₊₁</text><text x="374" y="76">: Virtual Reward of Action i</text>
+              <rect x="332" y="87" width="34" height="17" fill="#d9e6f6" stroke="#6f8cb3"/><text x="349" y="99" text-anchor="middle">Vᵢ</text><text x="374" y="99">: Expected Return of Sᵢ</text>
+            </g>
+            <!-- left flow: LLM reward model -->
+            <g font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#111">
+              <rect x="28" y="150" width="84" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="70" y="166" text-anchor="middle">Prompt</text>
+              <rect x="122" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="139" y="166" text-anchor="middle">A₁</text>
+              <rect x="162" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="179" y="166" text-anchor="middle">A₂</text>
+              <rect x="202" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="219" y="166" text-anchor="middle">A₃</text>
+              <text x="253" y="167" font-size="14">···</text>
+              <rect x="272" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="289" y="166" text-anchor="middle">Aᵢ</text>
+              <line x1="70" y1="174" x2="70" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="139" y1="174" x2="139" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="179" y1="174" x2="179" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="219" y1="174" x2="219" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="289" y1="174" x2="289" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <rect x="28" y="196" width="278" height="38" rx="10" fill="#e2efdc" stroke="#6b8f6b"/><text x="167" y="220" text-anchor="middle" font-size="13">Reward Model (LLM)</text>
+              <line x1="289" y1="234" x2="289" y2="252" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <rect x="120" y="254" width="200" height="22" fill="#d98d80" stroke="#9c453c"/><text x="220" y="269" text-anchor="middle" font-size="12">Classification Head</text>
+              <line x1="289" y1="276" x2="289" y2="294" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <rect x="267" y="296" width="44" height="22" fill="#f6efc3" stroke="#a89a4f"/><text x="289" y="311" text-anchor="middle">Rᵢ₊₁</text>
+            </g>
+            <!-- right flow: BERT reward model -->
+            <g font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#111">
+              <rect x="352" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="369" y="166" text-anchor="middle">cls</text>
+              <rect x="394" y="150" width="84" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="436" y="166" text-anchor="middle">Prompt</text>
+              <rect x="488" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="505" y="166" text-anchor="middle">A₁</text>
+              <rect x="528" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="545" y="166" text-anchor="middle">A₂</text>
+              <text x="578" y="167" font-size="14">···</text>
+              <rect x="600" y="150" width="34" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="617" y="166" text-anchor="middle">Aᵢ</text>
+              <line x1="369" y1="174" x2="369" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="436" y1="174" x2="436" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="505" y1="174" x2="505" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="545" y1="174" x2="545" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <line x1="617" y1="174" x2="617" y2="194" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <rect x="352" y="196" width="282" height="38" rx="10" fill="#e2efdc" stroke="#6b8f6b"/><text x="493" y="220" text-anchor="middle" font-size="13">Reward Model (Bert)</text>
+              <line x1="369" y1="234" x2="369" y2="252" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <rect x="352" y="254" width="200" height="22" fill="#d98d80" stroke="#9c453c"/><text x="452" y="269" text-anchor="middle" font-size="12">Classification Head</text>
+              <line x1="369" y1="276" x2="369" y2="294" stroke="#333" stroke-width="1.5" marker-end="url(#ar-rew)"/>
+              <rect x="347" y="296" width="44" height="22" fill="#f6efc3" stroke="#a89a4f"/><text x="369" y="311" text-anchor="middle">Rᵢ₊₁</text>
+            </g>
+          </svg>
+        </div>
+        <!-- Central PPO flow -->
+        <div class="ppo-central">
+          <svg viewBox="0 0 780 270" role="img" aria-label="Central PPO data flow: prompt q goes through the policy model to produce output o, which is scored by the reference model (KL), reward model, and value model; KL and reward combine into r, which with value v feeds GAE to produce advantage A, used to update the policy and value models">
+            <defs><marker id="ar-ppo" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#333"/></marker></defs>
+            <text x="36" y="100" font-family="Helvetica,Arial,sans-serif" font-size="26" font-weight="800" fill="#111">PPO</text>
+            <g font-family="Helvetica,Arial,sans-serif" font-size="14" fill="#111">
+              <rect x="30" y="126" width="46" height="34" rx="8" fill="#fff" stroke="#555"/><text x="53" y="148" text-anchor="middle" font-style="italic">q</text>
+              <line x1="76" y1="143" x2="102" y2="143" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="104" y="116" width="108" height="54" rx="12" fill="#fbeec6" stroke="#c2a355"/><text x="158" y="138" text-anchor="middle">Policy</text><text x="158" y="156" text-anchor="middle">Model</text>
+              <line x1="212" y1="143" x2="244" y2="143" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="246" y="126" width="44" height="34" rx="8" fill="#fff" stroke="#555"/><text x="268" y="148" text-anchor="middle" font-style="italic">o</text>
+              <line x1="290" y1="136" x2="350" y2="56" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <line x1="290" y1="143" x2="350" y2="124" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <line x1="290" y1="150" x2="350" y2="208" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="352" y="32" width="118" height="44" rx="10" fill="#cfe0f4" stroke="#5a7fb5"/><text x="411" y="50" text-anchor="middle">Reference</text><text x="411" y="68" text-anchor="middle">Model</text>
+              <rect x="352" y="102" width="118" height="44" rx="10" fill="#cfe0f4" stroke="#5a7fb5"/><text x="411" y="120" text-anchor="middle">Reward</text><text x="411" y="138" text-anchor="middle">Model</text>
+              <rect x="352" y="188" width="118" height="44" rx="10" fill="#fbeec6" stroke="#c2a355"/><text x="411" y="206" text-anchor="middle">Value</text><text x="411" y="224" text-anchor="middle">Model</text>
+              <text x="486" y="46" font-style="italic" font-size="15">KL</text>
+              <path d="M470,54 C494,56 506,68 509,79" fill="none" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <path d="M470,124 C494,120 506,110 509,101" fill="none" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <circle cx="511" cy="90" r="11" fill="#fff" stroke="#333" stroke-width="1.5"/>
+              <line x1="504" y1="90" x2="518" y2="90" stroke="#333" stroke-width="1.5"/><line x1="511" y1="83" x2="511" y2="97" stroke="#333" stroke-width="1.5"/>
+              <line x1="522" y1="90" x2="554" y2="90" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="556" y="73" width="44" height="34" rx="8" fill="#fff" stroke="#555"/><text x="578" y="95" text-anchor="middle" font-style="italic">r</text>
+              <line x1="470" y1="210" x2="554" y2="210" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="556" y="193" width="44" height="34" rx="8" fill="#fff" stroke="#555"/><text x="578" y="215" text-anchor="middle" font-style="italic">v</text>
+              <line x1="600" y1="90" x2="646" y2="126" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <line x1="600" y1="210" x2="646" y2="158" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="648" y="122" width="62" height="40" rx="8" fill="#fff" stroke="#555"/><text x="679" y="147" text-anchor="middle">GAE</text>
+              <line x1="710" y1="142" x2="734" y2="142" stroke="#333" stroke-width="1.5" marker-end="url(#ar-ppo)"/>
+              <rect x="736" y="122" width="40" height="40" rx="8" fill="#fff" stroke="#555"/><text x="756" y="147" text-anchor="middle" font-style="italic">A</text>
+              <!-- feedback: A updates the policy model -->
+              <path d="M756,122 C700,4 260,0 162,112" fill="none" stroke="#333" stroke-width="1.4" marker-end="url(#ar-ppo)"/>
+              <!-- feedback: A/GAE also updates the value model -->
+              <path d="M756,162 C736,244 560,258 474,228" fill="none" stroke="#333" stroke-width="1.4" marker-end="url(#ar-ppo)"/>
+            </g>
+          </svg>
+        </div>
+        <div class="panel-grid">
+          <!-- Policy Model panel -->
+          <svg viewBox="0 0 680 350" role="img" aria-label="Policy Model panel: the prompt goes into the policy LLM, which generates tokens A1 to Ai; states S1, S2, Si are the growing prefixes">
+            <defs><marker id="ar-pol" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#333"/></marker></defs>
+            <rect x="4" y="4" width="672" height="342" rx="16" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="8 6"/>
+            <text x="26" y="46" font-family="Helvetica,Arial,sans-serif" font-size="24" font-weight="700" fill="#111">Policy Model</text>
+            <g font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#111">
+              <rect x="332" y="18" width="34" height="17" fill="#f7ddc0" stroke="#8a6a48"/><text x="349" y="30" text-anchor="middle">Aᵢ</text><text x="374" y="30">: Token i</text>
+              <rect x="332" y="41" width="34" height="17" fill="#f6efc3" stroke="#a89a4f"/><text x="349" y="53" text-anchor="middle">Rᵢ₊₁</text><text x="374" y="53">: Reward of Action i</text>
+              <rect x="332" y="64" width="34" height="17" fill="#f6efc3" stroke="#a89a4f" stroke-dasharray="3 2"/><text x="349" y="76" text-anchor="middle">R̃ᵢ₊₁</text><text x="374" y="76">: Virtual Reward of Action i</text>
+              <rect x="332" y="87" width="34" height="17" fill="#d9e6f6" stroke="#6f8cb3"/><text x="349" y="99" text-anchor="middle">Vᵢ</text><text x="374" y="99">: Expected Return of Sᵢ</text>
+            </g>
+            <g font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#111">
+              <rect x="40" y="140" width="100" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="90" y="156" text-anchor="middle">Prompt</text>
+              <line x1="90" y1="164" x2="90" y2="184" stroke="#333" stroke-width="1.5" marker-end="url(#ar-pol)"/>
+              <rect x="40" y="186" width="380" height="38" rx="10" fill="#e2efdc" stroke="#6b8f6b"/><text x="230" y="210" text-anchor="middle" font-size="14">Policy Model (LLM)</text>
+              <line x1="150" y1="224" x2="150" y2="242" stroke="#333" stroke-width="1.5" marker-end="url(#ar-pol)"/>
+              <line x1="210" y1="224" x2="210" y2="242" stroke="#333" stroke-width="1.5" marker-end="url(#ar-pol)"/>
+              <line x1="270" y1="224" x2="270" y2="242" stroke="#333" stroke-width="1.5" marker-end="url(#ar-pol)"/>
+              <line x1="360" y1="224" x2="360" y2="242" stroke="#333" stroke-width="1.5" marker-end="url(#ar-pol)"/>
+              <rect x="131" y="244" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="150" y="260" text-anchor="middle">A₁</text>
+              <rect x="191" y="244" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="210" y="260" text-anchor="middle">A₂</text>
+              <rect x="251" y="244" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="270" y="260" text-anchor="middle">A₃</text>
+              <text x="312" y="261" font-size="14">···</text>
+              <rect x="341" y="244" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="360" y="260" text-anchor="middle">Aᵢ</text>
+              <!-- states: S1, S2, Si are growing prefixes -->
+              <g stroke="#333" stroke-width="1.3">
+                <line x1="40" y1="288" x2="170" y2="288"/><line x1="40" y1="282" x2="40" y2="294"/><line x1="170" y1="282" x2="170" y2="294"/>
+                <line x1="40" y1="310" x2="230" y2="310"/><line x1="40" y1="304" x2="40" y2="316"/><line x1="230" y1="304" x2="230" y2="316"/>
+                <line x1="40" y1="332" x2="380" y2="332"/><line x1="40" y1="326" x2="40" y2="338"/><line x1="380" y1="326" x2="380" y2="338"/>
+              </g>
+              <text x="100" y="283">S₁</text>
+              <text x="130" y="305">S₂</text>
+              <text x="205" y="327">Sᵢ</text>
+            </g>
+          </svg>
+          <!-- Value Model panel -->
+          <svg viewBox="0 0 680 350" role="img" aria-label="Value Model panel: prompt and tokens go into the critic model (a policy-like model) whose value head outputs per-token expected returns V1 to Vi">
+            <defs><marker id="ar-val" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#333"/></marker></defs>
+            <rect x="4" y="4" width="672" height="342" rx="16" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="8 6"/>
+            <text x="26" y="46" font-family="Helvetica,Arial,sans-serif" font-size="24" font-weight="700" fill="#111">Value Model</text>
+            <g font-family="Helvetica,Arial,sans-serif" font-size="11" fill="#111">
+              <rect x="332" y="18" width="34" height="17" fill="#f7ddc0" stroke="#8a6a48"/><text x="349" y="30" text-anchor="middle">Aᵢ</text><text x="374" y="30">: Token i</text>
+              <rect x="332" y="41" width="34" height="17" fill="#f6efc3" stroke="#a89a4f"/><text x="349" y="53" text-anchor="middle">Rᵢ₊₁</text><text x="374" y="53">: Reward of Action i</text>
+              <rect x="332" y="64" width="34" height="17" fill="#f6efc3" stroke="#a89a4f" stroke-dasharray="3 2"/><text x="349" y="76" text-anchor="middle">R̃ᵢ₊₁</text><text x="374" y="76">: Virtual Reward of Action i</text>
+              <rect x="332" y="87" width="34" height="17" fill="#d9e6f6" stroke="#6f8cb3"/><text x="349" y="99" text-anchor="middle">Vᵢ</text><text x="374" y="99">: Expected Return of Sᵢ</text>
+            </g>
+            <g font-family="Helvetica,Arial,sans-serif" font-size="12" fill="#111">
+              <rect x="40" y="140" width="100" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="90" y="156" text-anchor="middle">Prompt</text>
+              <rect x="150" y="140" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="169" y="156" text-anchor="middle">A₁</text>
+              <rect x="210" y="140" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="229" y="156" text-anchor="middle">A₂</text>
+              <rect x="270" y="140" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="289" y="156" text-anchor="middle">A₃</text>
+              <text x="330" y="157" font-size="14">···</text>
+              <rect x="356" y="140" width="38" height="24" fill="#f7ddc0" stroke="#8a6a48"/><text x="375" y="156" text-anchor="middle">Aᵢ</text>
+              <line x1="90" y1="164" x2="90" y2="184" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="169" y1="164" x2="169" y2="184" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="229" y1="164" x2="229" y2="184" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="289" y1="164" x2="289" y2="184" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="375" y1="164" x2="375" y2="184" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <rect x="40" y="186" width="380" height="38" rx="10" fill="#e2efdc" stroke="#6b8f6b"/><text x="230" y="210" text-anchor="middle" font-size="14">Critic Model (Policy Model)</text>
+              <line x1="110" y1="224" x2="110" y2="240" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="180" y1="224" x2="180" y2="240" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="250" y1="224" x2="250" y2="240" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="360" y1="224" x2="360" y2="240" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <rect x="90" y="242" width="290" height="22" fill="#d98d80" stroke="#9c453c"/><text x="235" y="257" text-anchor="middle" font-size="12">Value Head</text>
+              <line x1="110" y1="264" x2="110" y2="280" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="180" y1="264" x2="180" y2="280" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="250" y1="264" x2="250" y2="280" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <line x1="360" y1="264" x2="360" y2="280" stroke="#333" stroke-width="1.5" marker-end="url(#ar-val)"/>
+              <rect x="90" y="282" width="40" height="24" fill="#d9e6f6" stroke="#6f8cb3"/><text x="110" y="298" text-anchor="middle">V₁</text>
+              <rect x="160" y="282" width="40" height="24" fill="#d9e6f6" stroke="#6f8cb3"/><text x="180" y="298" text-anchor="middle">V₂</text>
+              <rect x="230" y="282" width="40" height="24" fill="#d9e6f6" stroke="#6f8cb3"/><text x="250" y="298" text-anchor="middle">V₃</text>
+              <text x="305" y="299" font-size="14">···</text>
+              <rect x="340" y="282" width="40" height="24" fill="#d9e6f6" stroke="#6f8cb3"/><text x="360" y="298" text-anchor="middle">Vᵢ</text>
+            </g>
+          </svg>
+        </div>
+      </figure>
 
       <h3>What the value model is and how it is trained</h3>
-      <p>The value model is the baseline for reward. A reward number for one prompt is difficult to interpret without an estimate of what reward was expected. PPO therefore computes advantage as the realized or estimated return minus the value-model prediction.</p>
+      <p>The value model is used as a baseline for the reward. Because a reward is only known at the prompt/sequence level, you can't tell whether a given reward is good or bad without a baseline to compare it to &mdash; that's exactly how advantage is computed: return minus the value-model prediction.</p>
       <div class="math-block">advantage = return − value-model prediction</div>
-      <p>The value model is trained during PPO together with the policy model. It learns to predict the <strong>expected future KL-penalized reward from every token position</strong>. Architecturally, it is commonly a policy-like transformer with a scalar value head that produces V(s<sub>1</sub>), V(s<sub>2</sub>), …, V(s<sub>T</sub>) rather than vocabulary logits.</p>
+      <div class="note-box"><strong>Is the value model trained during PPO, together with the policy model?</strong> Yes. The value model learns to predict the <strong>expected future KL-penalized reward from every token position</strong>. Architecturally, it is commonly a policy-like transformer with a scalar value head that produces V(s<sub>1</sub>), V(s<sub>2</sub>), …, V(s<sub>T</sub>) rather than vocabulary logits.</div>
 
       <h3>Sequence-level reward versus token-level PPO updates</h3>
-      <p>Since PPO updates the policy at the <em>token</em> level but a scalar reward typically only exists at the sequence level, it needs a token-level advantage for every position. That's exactly what the value model and GAE are for &mdash; see <a href="rl-foundation.html">RL Foundation</a> for the full derivation.</p>
+      <div class="note-box"><strong>Is the value model token-level while reward is prompt-level?</strong> Yes &mdash; in LLM PPO this is the key complication.</div>
+      <p>Usually the reward model gives a reward for the <strong>whole completion</strong>:</p>
+      <div class="timeline">Prompt + generated answer → reward score
+
+Example:
+Final reward = 0.8</div>
+      <p>But PPO updates the policy at the <strong>token level</strong>:</p>
+      <div class="timeline">token 1 probability
+token 2 probability
+token 3 probability
+...</div>
+      <p>So we need token-level advantages Â₁, Â₂, Â₃, …, Â<sub>T</sub>. Each token needs to know: did this token contribute to a better-than-expected final answer? Since PPO updates the policy at the <em>token</em> level but a scalar reward typically only exists at the sequence level, it needs a token-level advantage for every position. That's exactly what the value model and GAE are for &mdash; see <a href="rl-foundation.html">RL Foundation</a> for the full derivation.</p>
       <div class="timeline" aria-label="Sequence reward and token-level advantages">Prompt + generated answer ─────────────────────────────→ final reward score = 0.8
 
 token 1        token 2        token 3        ···        token T
@@ -146,76 +502,36 @@ Question for every token: Did this token contribute to a better-than-expected fi
       </table>
       <p>This maps onto two concrete training strategies. A pure Monte Carlo strategy scales the policy gradient using Â = γ<sup>T−t</sup>r<sub>T</sub> − V(s<sub>t</sub>), where every single token inherits the same sequence-level blame or praise, and trains the critic by minimizing MSE directly against the full empirical outcome &mdash; zero bias, but extreme variance, since trajectory fluctuations heavily destabilize the gradient. A GAE strategy scales the policy gradient smoothly using Â<sup>GAE</sup>, where the late-stage penalty or reward echo decays exponentially by (γλ)<sup>l</sup>, and trains the critic against the GAE-bootstrapped value targets instead &mdash; balanced variance (intermediate critic anchors intercept noise), at the cost of some controlled bias if the critic network is still undertrained.</p>
 
-      <h2>Policy gradient: from reward objective to parameter update</h2>
-      <p>The state-value function V<sup>π</sup>(s) is the average return expected from state s. That expectation averages over actions: multiply each action's probability by its expected future return and sum over actions.</p>
-      <div class="math-block">V<sup>π</sup>(s) = E<sub>a∼π</sub>[Q<sup>π</sup>(s,a)] = Σ<sub>a∈A</sub>π(a|s)Q<sup>π</sup>(s,a)</div>
-      <p>The reward objective is:</p>
-      <div class="math-block">J(θ) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)V<sup>π</sup>(s) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>π<sub>θ</sub>(a|s)Q<sup>π</sup>(s,a)</div>
-      <p>Here d<sup>π</sup>(s) is the on-policy state distribution: the probability of visiting state s while following π<sub>θ</sub>. The policy-gradient theorem rewrites the gradient as:</p>
-      <div class="math-block">∇<sub>θ</sub>J(θ) ∝ Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>Q<sup>π</sup>(s,a)∇<sub>θ</sub>π<sub>θ</sub>(a|s)</div>
-      <div class="math-block">∇<sub>θ</sub>J(θ) = E<sub>s∼d<sup>π</sup>, a∼π<sub>θ</sub></sub>[Q<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
-      <p>Replacing Q with advantage gives:</p>
-      <div class="math-block">A<sup>π</sup>(s,a) = Q<sup>π</sup>(s,a) − V<sup>π</sup>(s)</div>
-      <div class="math-block">∇<sub>θ</sub>J(θ) = E[A<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
-      <p>More concretely, a sampled gradient contribution is:</p>
-      <div class="math-block">ĝ<sub>t</sub> = Â<sub>t</sub>∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)</div>
-      <p>The fundamental Monte Carlo policy-gradient update can also be written:</p>
-      <div class="math-block">θ<sub>t+1</sub> = θ<sub>t</sub> + α∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)G<sub>t</sub></div>
-      <ul>
-        <li>θ: the policy-network parameters.</li>
-        <li>α: the learning rate.</li>
-        <li>∇log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>): the direction that increases the sampled action's log-probability.</li>
-        <li>G<sub>t</sub>: the cumulative discounted return from time t to the end of the trajectory.</li>
-      </ul>
 
-      <h3>Policy gradient versus the gradient-descent optimizer</h3>
-      <p>These are different layers of the training procedure:</p>
-      <ul>
-        <li><strong>The policy-gradient algorithm</strong> defines the objective, how reward or advantage is computed, and how policy movement is constrained.</li>
-        <li><strong>The optimizer</strong> receives the resulting gradient and decides how to scale it and update the parameters. PPO and GRPO typically use Adam or AdamW underneath.</li>
-      </ul>
-      <div class="flow-grid" aria-label="Supervised learning and policy-gradient learning comparison">
-        <section class="flow-card">
-          <h4>Supervised learning</h4>
-          <div class="flow-line"><span class="flow-node">Known label</span><span class="arrow">→</span><span class="flow-node">Cross-entropy loss</span><span class="arrow">→</span><span class="flow-node signal">Direct gradient</span></div>
-          <div class="math-block">θ ← θ − learning_rate × ∇<sub>θ</sub>loss</div>
-        </section>
-        <section class="flow-card">
-          <h4>RL / policy gradient</h4>
-          <div class="flow-line"><span class="flow-node policy">Policy samples a discrete action</span><span class="arrow">→</span><span class="flow-node model">Environment or reward model scores it</span></div>
-          <p>The reward is not directly differentiable through discrete sampling, so the update increases probabilities of actions with positive advantage and decreases probabilities of actions with negative advantage.</p>
-          <div class="math-block">gradient ≈ advantage × ∇<sub>θ</sub>log π<sub>θ</sub>(action|state)</div>
-        </section>
-      </div>
+      <h2>4. Which LLM parameters can PPO or GRPO update?</h2>
+      <div class="timeline">Embedding layer
+Transformer block 1
+Transformer block 2
+...
+Transformer block N
+LM head
 
-      <h3>What varies across policy-gradient algorithms?</h3>
-      <table>
-        <thead><tr><th>Difference</th><th>Meaning</th><th>Examples</th></tr></thead>
-        <tbody>
-          <tr><td>Reward source</td><td>Where reward comes from</td><td>Reward model, verifier, human feedback, rule reward</td></tr>
-          <tr><td>Baseline / advantage</td><td>How “better than expected” is measured</td><td>Value model, group mean, no baseline</td></tr>
-          <tr><td>Policy constraint</td><td>How overly large updates are prevented</td><td>KL constraint, clipping, trust region</td></tr>
-          <tr><td>Data collection</td><td>Online versus offline; one sample versus many</td><td>PPO rollouts, GRPO group samples</td></tr>
-          <tr><td>Critic usage</td><td>Whether a value model is trained</td><td>PPO usually yes; GRPO no</td></tr>
-          <tr><td>Loss shape</td><td>The exact objective used for the gradient</td><td>Vanilla policy gradient, PPO clipped loss, TRPO constrained objective</td></tr>
-        </tbody>
-      </table>
-      <p>For an LLM, the action is the generated token, the state is the prompt plus previous tokens, and the policy is the next-token distribution.</p>
+That means PPO/GRPO can update:
 
-      <h3>Adam versus AdamW</h3>
-      <p>The standard adaptive-optimizer update can be summarized as:</p>
-      <div class="math-block">θ<sub>t</sub> = θ<sub>t−1</sub> − γ(m̂<sub>t</sub> / (√v̂<sub>t</sub> + ε)) − ηλθ<sub>t−1</sub></div>
-      <ul>
-        <li>θ<sub>t</sub>: model parameters.</li>
-        <li>γ: learning rate.</li>
-        <li>m̂<sub>t</sub> and v̂<sub>t</sub>: bias-corrected moving averages of gradients and squared gradients.</li>
-        <li>ε: a small smoothing term that prevents division by zero.</li>
-        <li>λ: weight-decay rate.</li>
-        <li>η: schedule multiplier.</li>
-      </ul>
-      <p>In Adam, L2 regularization is mixed into the gradient moments. In AdamW, weight decay is decoupled and subtracted directly from the weights, so decay does not depend on the gradient's history.</p>
+    token embedding weights
 
-      <h2>Which LLM parameters can PPO or GRPO update?</h2>
+    attention weights: Wq, Wk, Wv, Wo
+
+    MLP/feed-forward weights
+
+    layer norm weights
+
+    output head / LM head
+
+meaning
+q_proj
+k_proj
+v_proj
+gate_proj
+up_proj
+down_proj
+o_proj</div>
+      <p>Redrawn as a stack:</p>
       <div class="architecture" aria-label="Trainable LLM parameter stack">
         <div class="architecture-row"><span class="flow-node">Embedding layer</span><span class="arrow">→</span><span class="flow-node model">Transformer blocks 1…N</span><span class="arrow">→</span><span class="flow-node policy">LM head</span></div>
         <div class="architecture-row"><span class="flow-node">Attention: q_proj, k_proj, v_proj, o_proj</span><span class="flow-node">MLP: gate_proj, up_proj, down_proj</span><span class="flow-node">LayerNorm weights</span></div>
@@ -233,17 +549,28 @@ Question for every token: Did this token contribute to a better-than-expected fi
       </table>
 
       <h3>Why PPO?</h3>
-      <p>PPO is a policy-gradient algorithm used in RLHF to train an LLM safely and efficiently.</p>
+      <p>PPO is a policy-gradient algorithm from reinforcement learning. It's used in RLHF to train an LLM safely and efficiently.</p>
       <ul>
-        <li>It allows stable, constrained updates.</li>
-        <li>Clipping avoids drastic policy changes that could hurt performance.</li>
-        <li>It helps balance exploration (trying new responses) and exploitation (using behavior known to work).</li>
-        <li>For LLMs, PPO updates the language-model policy to prefer outputs that the reward model scores more highly.</li>
-        <li>Its intended behavioral goals can include reducing toxicity, improving helpfulness, and reducing hallucination.</li>
+        <li>PPO allows stable and constrained updates to the model.</li>
+        <li>It avoids drastic policy changes that could hurt performance (by clipping the update step).</li>
+        <li>It helps maintain a balance between exploration (trying new responses) and exploitation (using what it knows works well).</li>
+      </ul>
+      <p>In LLMs:</p>
+      <ul>
+        <li>The policy is the language model: it generates text (actions) based on input (state).</li>
+        <li>PPO updates the policy to prefer outputs that the reward model likes more.</li>
+        <li>It helps reduce toxicity, improve helpfulness, and avoid hallucination.</li>
       </ul>
 
       <h3>DPO: skipping the reward model entirely</h3>
-      <p>DPO doesn't need extra scoring data. It works directly from a chosen response y<sub>w</sub> and a rejected response y<sub>l</sub>, and maximizes the reward model's implicit scoring gap between them:</p>
+      <p>DPO improves on PPO's complexity (four models, four moving pipelines) by using pairwise comparison data collected in advance (offline), bypassing the reward-modeling step, and optimizing the language model directly against preference data. The motivation: optimize the policy directly on preference pairs via a classification-style loss.</p>
+      <p>The dataset DPO needs has three parts per example:</p>
+      <ul>
+        <li><strong>prompt</strong> &mdash; the input x</li>
+        <li><strong>chosen</strong> &mdash; the preferred response y<sub>w</sub></li>
+        <li><strong>rejected</strong> &mdash; the dispreferred response y<sub>l</sub></li>
+      </ul>
+      <p>DPO doesn't need any extra scoring data. It works directly from a chosen response y<sub>w</sub> and a rejected response y<sub>l</sub>, and maximizes the implicit reward model's scoring gap between them &mdash; i.e. it maximizes how much the chosen response's reward exceeds the rejected response's reward:</p>
       <p>L<sub>DPO</sub>(π<sub>θ</sub>; π<sub>ref</sub>) = −E<sub>(x,yw,yl)~D</sub>[log σ(β log(π<sub>θ</sub>(y<sub>w</sub>|x)/π<sub>ref</sub>(y<sub>w</sub>|x)) − β log(π<sub>θ</sub>(y<sub>l</sub>|x)/π<sub>ref</sub>(y<sub>l</sub>|x)))]</p>
       <p>Walking through what minimizing this actually does: it's equivalent to maximizing the implicit rewards r<sub>w</sub> = log(π<sub>θ</sub>(y<sub>w</sub>|x)/π<sub>ref</sub>(y<sub>w</sub>|x)) and r<sub>l</sub> = log(π<sub>ref</sub>(y<sub>l</sub>|x)/π<sub>θ</sub>(y<sub>l</sub>|x)). For the preferred outcome y<sub>w</sub>, we want π<sub>θ</sub>(y<sub>w</sub>|x) to grow; for the dispreferred outcome y<sub>l</sub>, we want it to shrink. And the gradient adapts to how wrong the reference model already was: if π<sub>ref</sub>(y<sub>w</sub>|x) was small, meaning the reference model failed to favor the good response, r<sub>w</sub>'s coefficient becomes large; if π<sub>ref</sub>(y<sub>l</sub>|x) was large, meaning the reference model failed to disfavor the bad response, r<sub>l</sub>'s coefficient becomes large too. In short, DPO pushes hardest exactly where the reference model's preferences were most wrong &mdash; without ever training a separate reward or value model.</p>
 
@@ -259,7 +586,7 @@ Question for every token: Did this token contribute to a better-than-expected fi
       <p><strong>3. Token-level policy gradient loss &mdash; stop underweighting long responses.</strong> Vanilla GRPO averages token loss within each response first, then averages across responses, so every response gets equal total weight regardless of length: L<sub>i</sub> = (1/|o<sub>i</sub>|) Σ<sub>t</sub> L<sub>i,t</sub>, then L<sub>GRPO</sub> = (1/G) Σ<sub>i</sub> L<sub>i</sub>. Concretely, if response A is 100 tokens and response B is 1,000 tokens, each gets ~50% of the total weight under response-level averaging &mdash; so each individual token in the short response ends up carrying roughly 10× the weight of each token in the long one. In long chain-of-thought training this causes two real problems: correct reasoning steps inside long correct answers get under-reinforced, and repetition, errors, and wasted reasoning inside long wrong answers get under-penalized. DAPO instead averages uniformly over every valid token in the whole training batch: L<sub>DAPO</sub> = Σ<sub>i</sub>Σ<sub>t</sub> L<sub>i,t</sub> / Σ<sub>i</sub>|o<sub>i</sub>|. With the same 100- vs. 1,000-token example (using a 900-token response B here), token-level weighting gives A ~10% of total weight and B ~90% &mdash; every reasoning token gets a comparable training signal regardless of which response it's in.</p>
       <p><strong>4. Overlong Reward Shaping &mdash; don't blindly punish truncation.</strong> Generation is capped at some max length (e.g. L<sub>max</sub> = 20,480 tokens); if the model hasn't finished by then, its output is force-truncated. A truncated response isn't necessarily a bad one &mdash; the reasoning so far might be basically correct, the model may simply have been mid-derivation, or the final answer just hadn't been emitted yet. Naively assigning truncated responses a strong negative reward teaches the model that the entire reasoning path was worthless, injecting noise and destabilizing training. DAPO offers two fixes: <em>Overlong Filtering</em>, which masks truncated samples out of the policy-gradient computation entirely rather than treating them as flatly wrong; and <em>Soft Overlong Punishment</em>, which ramps the length penalty up gradually as a response approaches L<sub>max</sub> (using a buffer zone L<sub>cache</sub>) rather than applying a sudden, sharp penalty only once the cap is hit.</p>
 
-      <h2>Loss and advantage functions across post-training algorithms</h2>
+      <h2>5. Loss and advantage functions across post-training algorithms</h2>
       <p>The PDF closes with a compact comparison of related objectives. The notation below keeps the same information while expressing it as selectable text.</p>
       <table>
         <thead><tr><th>Method</th><th>Core loss or policy signal</th><th>Advantage / preference signal</th></tr></thead>
