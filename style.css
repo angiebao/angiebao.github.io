@@ -127,6 +127,21 @@ a:focus {
   text-align: center;
 }
 
+.link-primary {
+  border: 1px solid var(--link);
+  border-radius: 4px;
+  display: inline-block;
+  font-weight: bold;
+  padding: 5px 14px;
+}
+
+.link-primary:hover,
+.link-primary:focus {
+  background: var(--link);
+  color: var(--page);
+  text-decoration: none;
+}
+
 .authors {
   color: var(--muted);
   font-weight: bold;
