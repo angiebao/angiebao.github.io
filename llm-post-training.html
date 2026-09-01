@@ -25,6 +25,7 @@
     .architecture { margin: 1.25rem 0; padding: 1.25rem; border: 1px solid #d7d7d7; border-radius: 8px; background: #fafafa; }
     .architecture-row { display: flex; align-items: center; justify-content: center; gap: .55rem; flex-wrap: wrap; margin: .75rem 0; }
     .timeline { margin: 1rem 0; padding: 1rem; overflow-x: auto; white-space: pre; background: #f7f7f7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.6; }
+    .source-note { margin-top: 1.5rem; color: #666; font-size: .9rem; }
     .note-box { margin: 1.25rem 0; padding: 1rem 1.25rem; border-left: 4px solid #d6a400; background: #fff9df; }
     .notes-section table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; }
     .notes-section th, .notes-section td { padding: .7rem; border: 1px solid #ddd; text-align: left; vertical-align: top; }
@@ -57,12 +58,12 @@
       <div class="note-box"><strong>Memory aid:</strong> SFT = data samples, model scores. RL = model samples, reward scores.</div>
 
       <h2>2. Policy gradient: from reward objective to parameter update</h2>
-      <div class="note-box"><strong>Reward function, following Lilian Weng's formula:</strong> the state-value function V<sup>π</sup>(s) represents the average reward you expect to get from state s. To find that average, you multiply the probability of taking an action by the payoff of that action, and sum them up.</div>
+      <div class="note-box"><strong>Reward function:</strong> the state-value function V<sup>π</sup>(s) represents the average reward you expect to get from state s. To find that average, you multiply the probability of taking an action by the payoff of that action, and sum them up.</div>
       <p>The state-value function V<sup>π</sup>(s) is the average return expected from state s. That expectation averages over actions: multiply each action's probability by its expected future return and sum over actions.</p>
       <div class="math-block">V<sup>π</sup>(s) = E<sub>a∼π</sub>[Q<sup>π</sup>(s,a)] = Σ<sub>a∈A</sub>π(a|s)Q<sup>π</sup>(s,a)</div>
       <p>The reward objective is:</p>
       <div class="math-block">J(θ) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)V<sup>π</sup>(s) = Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>π<sub>θ</sub>(a|s)Q<sup>π</sup>(s,a)</div>
-      <p>Here d<sup>π</sup>(s) is the stationary distribution of the Markov chain for π<sub>θ</sub> &mdash; the on-policy state distribution under π: the probability of visiting state s while following π<sub>θ</sub>. (For simplicity, the parameter θ is often omitted from the subscript of π, d, and Q when the policy π is already present elsewhere in the expression &mdash; e.g. d<sup>π</sup> and Q<sup>π</sup> should be read as d<sup>π<sub>θ</sub></sup> and Q<sup>π<sub>θ</sub></sup> if written in full.) The policy-gradient theorem rewrites the gradient as:</p>
+      <p>Here d<sup>π</sup>(s) is the stationary distribution of the Markov chain for π<sub>θ</sub> &mdash; the on-policy state distribution under π: the probability of visiting state s while following π<sub>θ</sub>. (For simplicity, the parameter θ is often omitted from the subscript of π, d, and Q when the policy π is already present elsewhere in the expression &mdash; e.g. d<sup>π</sup> and Q<sup>π</sup> should be read as d<sup>π<sub>θ</sub></sup> and Q<sup>π<sub>θ</sub></sup> if written in full.) The policy-gradient theorem (<a href="https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html">Sutton, McAllester, Singh &amp; Mansour, NeurIPS 1999</a>) rewrites the gradient as:</p>
       <div class="math-block">∇<sub>θ</sub>J(θ) ∝ Σ<sub>s∈S</sub>d<sup>π</sup>(s)Σ<sub>a∈A</sub>Q<sup>π</sup>(s,a)∇<sub>θ</sub>π<sub>θ</sub>(a|s)</div>
       <div class="math-block">∇<sub>θ</sub>J(θ) = E<sub>s∼d<sup>π</sup>, a∼π<sub>θ</sub></sub>[Q<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
       <div class="note-box">The policy-gradient algorithm is, at its core, just using gradient descent to maximize this reward.</div>
@@ -71,7 +72,7 @@
       <div class="math-block">∇<sub>θ</sub>J(θ) = E[A<sup>π</sup>(s,a)∇<sub>θ</sub>log π<sub>θ</sub>(a|s)]</div>
       <p>More concretely, a sampled gradient contribution is:</p>
       <div class="math-block">ĝ<sub>t</sub> = Â<sub>t</sub>∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)</div>
-      <p>The fundamental Monte Carlo policy-gradient update can also be written:</p>
+      <p>The fundamental Monte Carlo policy-gradient update &mdash; REINFORCE (<a href="https://doi.org/10.1007/BF00992696">Williams, 1992</a>) &mdash; can also be written:</p>
       <div class="math-block">θ<sub>t+1</sub> = θ<sub>t</sub> + α∇<sub>θ</sub>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)G<sub>t</sub></div>
       <ul>
         <li>θ: the policy-network parameters.</li>
@@ -148,6 +149,7 @@ policy = LLM next-token distribution</div>
         <li>η: schedule multiplier.</li>
       </ul>
       <p>In Adam, L2 regularization is mixed into the gradient moments. In AdamW, weight decay is decoupled and subtracted directly from the weights, so decay does not depend on the gradient's history.</p>
+      <p class="source-note">The notation in this section &mdash; the on-policy state distribution d<sup>π</sup>(s) and the J(θ) formulation above &mdash; follows Lilian Weng's overview, <a href="https://lilianweng.github.io/posts/2018-04-08-policy-gradient/">&ldquo;Policy Gradient Algorithms&rdquo;</a> (2018). The underlying results are older: the policy-gradient theorem is <a href="https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html">Sutton, McAllester, Singh &amp; Mansour (NeurIPS 1999)</a>, REINFORCE is <a href="https://doi.org/10.1007/BF00992696">Williams (1992)</a>, and the advantage-based estimator ĝ<sub>t</sub> follows <a href="https://arxiv.org/abs/1506.02438">Schulman et al., GAE (2015)</a>. Chapter 13 of Sutton &amp; Barto's <a href="http://incompleteideas.net/book/the-book-2nd.html"><em>Reinforcement Learning: An Introduction</em></a> gives the textbook derivation.</p>
 
       <h2>3. PPO, GRPO, and DPO at a glance</h2>
       <p>In all three methods, the <strong>policy</strong> is the LLM model we are fine-tuning. The difference is how training examples and learning signals are produced.</p>
