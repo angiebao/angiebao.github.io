@@ -47,8 +47,8 @@
     </header>
 
     <section class="notes-section">
-      <div class="note-box"><strong>One-line summary:</strong> SFT minimizes the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>); RL minimizes the <em>reverse</em> KL divergence D<sub>KL</sub>(π<sub>θ</sub> ‖ p*).</div>
       <h2>1. SFT vs. RL: what's actually different</h2>
+      <div class="note-box"><strong>One-line summary:</strong> SFT minimizes the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>); RL minimizes the <em>reverse</em> KL divergence D<sub>KL</sub>(π<sub>θ</sub> ‖ p*).</div>
       <p>The cleanest way to distinguish them is by asking which distribution generates the training samples, and which direction of KL divergence gets minimized.</p>
       <ul>
         <li><strong>SFT</strong> trains on samples y drawn from a fixed data distribution. Minimizing the standard cross-entropy loss −log π<sub>θ</sub>(y|x) is equivalent to minimizing the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>). SFT asks: what does the data distribution produce, and does the model cover it?</li>
