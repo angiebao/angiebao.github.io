@@ -39,6 +39,25 @@
     .panel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
     .ppo-central { margin: 1rem 0; }
     @media (max-width: 760px) { .flow-grid { grid-template-columns: 1fr; } .panel-grid { grid-template-columns: 1fr; } }
+    .sec-num { color: #999; font-weight: 400; margin-right: .4em; }
+    .rl-toc { margin: 0 0 2.25rem; padding: .5rem .85rem; border: 1px solid #ddd; font-size: .88rem; line-height: 1.45; }
+    .rl-toc summary { cursor: pointer; font-weight: bold; letter-spacing: .04em; text-transform: uppercase; font-size: .8rem; color: #555; padding: .2rem 0; }
+    .rl-toc ul { list-style: none; margin: .6rem 0 0; padding: 0; }
+    .rl-toc .toc-sub { margin: .2rem 0 .2rem .85rem; }
+    .rl-toc li { margin: 0 0 .15rem; }
+    .rl-toc a { display: block; color: #333; padding: .2rem .4rem .2rem .55rem; border-left: 2px solid transparent; }
+    .rl-toc a:hover, .rl-toc a:focus { color: var(--link); background: #f5f5f5; text-decoration: none; }
+    .rl-toc .toc-num { color: #999; margin-right: .35em; }
+    .rl-toc .toc-h3 a { color: #555; }
+    .rl-toc a.is-current { border-left-color: #d6a400; background: #fff9df; color: #111; }
+    .notes-section h2[id], .notes-section h3[id] { scroll-margin-top: 1.25rem; }
+
+    @media (min-width: 1180px) {
+      main { max-width: 1280px; }
+      .rl-layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 3rem; align-items: start; }
+      .rl-toc { position: sticky; top: 1.25rem; max-height: calc(100vh - 2.5rem); overflow-y: auto; margin: 0; padding: 0 .75rem 0 0; border: none; border-right: 1px solid #ddd; }
+      .notes-section { margin-inline: 0; }
+    }
   </style>
 </head>
 <body>
@@ -48,8 +67,45 @@
       <h1>LLM Post-Training</h1>
     </header>
 
+    <div class="rl-layout">
+      <nav class="rl-toc" aria-label="Table of contents">
+        <details open>
+          <summary>Contents</summary>
+          <ul class="toc-list">
+            <li class="toc-h2"><a href="#sft-vs-rl-what-s-actually-different"><span class="toc-num">1</span> SFT vs. RL: what&#x27;s actually different</a>
+            </li>
+            <li class="toc-h2"><a href="#policy-gradient-from-reward-objective-to-parameter-update"><span class="toc-num">2</span> Policy gradient: from reward objective to parameter update</a>
+              <ul class="toc-sub">
+                <li class="toc-h3"><a href="#policy-gradient-versus-the-gradient-descent-optimizer"><span class="toc-num">2.1</span> Policy gradient versus the gradient-descent optimizer</a></li>
+                <li class="toc-h3"><a href="#what-varies-across-policy-gradient-algorithms"><span class="toc-num">2.2</span> What varies across policy-gradient algorithms?</a></li>
+                <li class="toc-h3"><a href="#adam-versus-adamw"><span class="toc-num">2.3</span> Adam versus AdamW</a></li>
+              </ul>
+            </li>
+            <li class="toc-h2"><a href="#ppo-grpo-and-dpo-at-a-glance"><span class="toc-num">3</span> PPO, GRPO, and DPO at a glance</a>
+              <ul class="toc-sub">
+                <li class="toc-h3"><a href="#ppo-building-the-loss-layer-by-layer"><span class="toc-num">3.1</span> PPO: building the loss layer by layer</a></li>
+                <li class="toc-h3"><a href="#the-four-model-ppo-data-flow"><span class="toc-num">3.2</span> The four-model PPO data flow</a></li>
+                <li class="toc-h3"><a href="#what-the-value-model-is-and-how-it-is-trained"><span class="toc-num">3.3</span> What the value model is and how it is trained</a></li>
+                <li class="toc-h3"><a href="#sequence-level-reward-versus-token-level-ppo-updates"><span class="toc-num">3.4</span> Sequence-level reward versus token-level PPO updates</a></li>
+                <li class="toc-h3"><a href="#why-gae-is-needed"><span class="toc-num">3.5</span> Why GAE is needed</a></li>
+                <li class="toc-h3"><a href="#estimator-comparison"><span class="toc-num">3.6</span> Estimator comparison</a></li>
+              </ul>
+            </li>
+            <li class="toc-h2"><a href="#which-llm-parameters-can-ppo-or-grpo-update"><span class="toc-num">4</span> Which LLM parameters can PPO or GRPO update?</a>
+              <ul class="toc-sub">
+                <li class="toc-h3"><a href="#why-ppo"><span class="toc-num">4.1</span> Why PPO?</a></li>
+                <li class="toc-h3"><a href="#dpo-skipping-the-reward-model-entirely"><span class="toc-num">4.2</span> DPO: skipping the reward model entirely</a></li>
+                <li class="toc-h3"><a href="#grpo-trading-the-value-model-for-group-statistics"><span class="toc-num">4.3</span> GRPO: trading the value model for group statistics</a></li>
+                <li class="toc-h3"><a href="#dapo-patching-grpo-s-four-failure-modes"><span class="toc-num">4.4</span> DAPO: patching GRPO&#x27;s four failure modes</a></li>
+              </ul>
+            </li>
+            <li class="toc-h2"><a href="#loss-and-advantage-functions-across-post-training-algorithms"><span class="toc-num">5</span> Loss and advantage functions across post-training algorithms</a>
+            </li>
+          </ul>
+        </details>
+      </nav>
     <section class="notes-section">
-      <h2>1. SFT vs. RL: what's actually different</h2>
+      <h2 id="sft-vs-rl-what-s-actually-different"><span class="sec-num">1</span> SFT vs. RL: what's actually different</h2>
       <div class="note-box"><strong>One-line summary:</strong> SFT minimizes the <em>forward</em> KL divergence D<sub>KL</sub>(p<sub>data</sub> ‖ π<sub>θ</sub>); RL minimizes the <em>reverse</em> KL divergence D<sub>KL</sub>(π<sub>θ</sub> ‖ p*).</div>
       <p>The cleanest way to distinguish them is by asking which distribution generates the training samples, and which direction of KL divergence gets minimized.</p>
       <ul>
@@ -58,7 +114,7 @@
       </ul>
       <div class="note-box"><strong>Memory aid:</strong> SFT = data samples, model scores. RL = model samples, reward scores.</div>
 
-      <h2>2. Policy gradient: from reward objective to parameter update</h2>
+      <h2 id="policy-gradient-from-reward-objective-to-parameter-update"><span class="sec-num">2</span> Policy gradient: from reward objective to parameter update</h2>
       <div class="note-box"><strong>Reward function:</strong> the state-value function V<sup>π</sup>(s) represents the average reward you expect to get from state s. To find that average, you multiply the probability of taking an action by the payoff of that action, and sum them up.</div>
       <p>The state-value function V<sup>π</sup>(s) is the average return expected from state s. That expectation averages over actions: multiply each action's probability by its expected future return and sum over actions.</p>
       <div class="math-block">V<sup>π</sup>(s) = E<sub>a∼π</sub>[Q<sup>π</sup>(s,a)] = Σ<sub>a∈A</sub>π(a|s)Q<sup>π</sup>(s,a)</div>
@@ -82,7 +138,7 @@
         <li>G<sub>t</sub>: the cumulative discounted return from time t to the end of the trajectory.</li>
       </ul>
 
-      <h3>Policy gradient versus the gradient-descent optimizer</h3>
+      <h3 id="policy-gradient-versus-the-gradient-descent-optimizer"><span class="sec-num">2.1</span> Policy gradient versus the gradient-descent optimizer</h3>
       <p>These are different layers of the training procedure. Gradient descent's parameter-update rule tells you, given the gradient, how to update the parameter: w_new = w_old + learning_rate × gradient. Optimizers built on top of gradient descent are mostly concerned with how to scale that gradient and modify the update rule.</p>
       <ul>
         <li><strong>The policy-gradient algorithm</strong> defines what loss you optimize and how you compute advantage / constrain policy movement.</li>
@@ -121,7 +177,7 @@ decrease probability of actions that got bad reward</div>
         </section>
       </div>
 
-      <h3>What varies across policy-gradient algorithms?</h3>
+      <h3 id="what-varies-across-policy-gradient-algorithms"><span class="sec-num">2.2</span> What varies across policy-gradient algorithms?</h3>
       <table>
         <thead><tr><th>Difference</th><th>Meaning</th><th>Examples</th></tr></thead>
         <tbody>
@@ -138,7 +194,7 @@ decrease probability of actions that got bad reward</div>
 state = prompt + previous tokens
 policy = LLM next-token distribution</div>
 
-      <h3>Adam versus AdamW</h3>
+      <h3 id="adam-versus-adamw"><span class="sec-num">2.3</span> Adam versus AdamW</h3>
       <p>The standard adaptive-optimizer update can be summarized as:</p>
       <div class="math-block">θ<sub>t</sub> = θ<sub>t−1</sub> − γ(m̂<sub>t</sub> / (√v̂<sub>t</sub> + ε)) − ηλθ<sub>t−1</sub></div>
       <ul>
@@ -152,7 +208,7 @@ policy = LLM next-token distribution</div>
       <p>In Adam, L2 regularization is mixed into the gradient moments. In AdamW, weight decay is decoupled and subtracted directly from the weights, so decay does not depend on the gradient's history.</p>
       <p class="source-note">The notation in this section &mdash; the on-policy state distribution d<sup>π</sup>(s) and the J(θ) formulation above &mdash; follows Lilian Weng's overview, <a href="https://lilianweng.github.io/posts/2018-04-08-policy-gradient/">&ldquo;Policy Gradient Algorithms&rdquo;</a> (2018). The underlying results are older: the policy-gradient theorem is <a href="https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html">Sutton, McAllester, Singh &amp; Mansour (NeurIPS 1999)</a>, REINFORCE is <a href="https://doi.org/10.1007/BF00992696">Williams (1992)</a>, and the advantage-based estimator ĝ<sub>t</sub> follows <a href="https://arxiv.org/abs/1506.02438">Schulman et al., GAE (2015)</a>. Chapter 13 of Sutton &amp; Barto's <a href="http://incompleteideas.net/book/the-book-2nd.html"><em>Reinforcement Learning: An Introduction</em></a> gives the textbook derivation.</p>
 
-      <h2>3. PPO, GRPO, and DPO at a glance</h2>
+      <h2 id="ppo-grpo-and-dpo-at-a-glance"><span class="sec-num">3</span> PPO, GRPO, and DPO at a glance</h2>
       <p>In all three methods, the <strong>policy</strong> is the LLM model we are fine-tuning. The difference is how training examples and learning signals are produced.</p>
       <p><strong>PPO.</strong> Given a prompt, the current policy model generates an answer, the reward model scores that answer, and PPO updates the policy to get higher reward. The loss maximizes reward, minus a KL penalty from the reference model, minus the expected reward from the value model.</p>
       <p><strong>GRPO.</strong> Given a prompt, generate multiple answers (answer 1, answer 2, answer 3, answer 4, &hellip;), score each answer, compare within the group, then do the RL update.</p>
@@ -182,7 +238,7 @@ policy = LLM next-token distribution</div>
         </section>
       </div>
 
-      <h3>PPO: building the loss layer by layer</h3>
+      <h3 id="ppo-building-the-loss-layer-by-layer"><span class="sec-num">3.1</span> PPO: building the loss layer by layer</h3>
       <p>It's easiest to understand PPO's objective as a sequence of small fixes layered on top of the plain policy-gradient loss, each addressing a specific failure mode of the previous version.</p>
       <p><strong>Step 1.</strong> Start from loss = −advantage × log_prob(generated answer). If advantage &gt; 0, minimizing the loss increases the log-probability of that answer &mdash; the model becomes more likely to generate it. If advantage &lt; 0, the reverse. Advantage controls the direction and strength of every update.</p>
       <p><strong>Step 2.</strong> The problem with using log_prob(answer) directly is that if you update the model too aggressively in one step, the probability can change drastically and destroy prior knowledge. So instead, track the probability <em>ratio</em> between the new and old policy: ρ = p<sub>new</sub>(answer)/p<sub>old</sub>(answer) = exp(log p<sub>new</sub> − log p<sub>old</sub>). The loss becomes −advantage × ρ. If ρ = 1 the new model behaves exactly like the old one; if ρ = 1.2, it's 20% more likely to generate that answer than before.</p>
@@ -198,7 +254,7 @@ policy = LLM next-token distribution</div>
       </table>
       <p><strong>Step 4.</strong> Combine the clipped policy loss with a KL penalty against the reference model to bound overall drift: Loss = max(−A×ρ, −A×clip(ρ, 1−ε, 1+ε)) + KL penalty. This needs four models in play at once &mdash; policy, reference, reward, and value.</p>
 
-      <h3>The four-model PPO data flow</h3>
+      <h3 id="the-four-model-ppo-data-flow"><span class="sec-num">3.2</span> The four-model PPO data flow</h3>
       <p>Four models run at once during PPO training: the policy model being trained, a frozen reference model, a reward model, and a value model. Each plays a distinct role in turning one prompt into per-token advantages.</p>
       <div class="legend-box" aria-label="Notation legend">
         <strong>Notation used in the figure:</strong>
@@ -447,12 +503,12 @@ policy = LLM next-token distribution</div>
         </div>
       </figure>
 
-      <h3>What the value model is and how it is trained</h3>
+      <h3 id="what-the-value-model-is-and-how-it-is-trained"><span class="sec-num">3.3</span> What the value model is and how it is trained</h3>
       <p>The value model is used as a baseline for the reward. Because a reward is only known at the prompt/sequence level, you can't tell whether a given reward is good or bad without a baseline to compare it to &mdash; that's exactly how advantage is computed: return minus the value-model prediction.</p>
       <div class="math-block">advantage = return − value-model prediction</div>
       <div class="note-box"><strong>Is the value model trained during PPO, together with the policy model?</strong> Yes. The value model learns to predict the <strong>expected future KL-penalized reward from every token position</strong>. Architecturally, it is commonly a policy-like transformer with a scalar value head that produces V(s<sub>1</sub>), V(s<sub>2</sub>), …, V(s<sub>T</sub>) rather than vocabulary logits.</div>
 
-      <h3>Sequence-level reward versus token-level PPO updates</h3>
+      <h3 id="sequence-level-reward-versus-token-level-ppo-updates"><span class="sec-num">3.4</span> Sequence-level reward versus token-level PPO updates</h3>
       <div class="note-box"><strong>Is the value model token-level while reward is prompt-level?</strong> Yes &mdash; in LLM PPO this is the key complication.</div>
       <p>Usually the reward model gives a reward for the <strong>whole completion</strong>:</p>
       <div class="timeline">Prompt + generated answer → reward score
@@ -480,7 +536,7 @@ Question for every token: Did this token contribute to a better-than-expected fi
       <p>and the Monte Carlo return advantage is:</p>
       <div class="math-block">Â<sub>t</sub><sup>MC</sup> = R<sub>t</sub> − V(s<sub>t</sub>)</div>
 
-      <h3>Why GAE is needed</h3>
+      <h3 id="why-gae-is-needed"><span class="sec-num">3.5</span> Why GAE is needed</h3>
       <p>GAE converts sparse or final rewards into smoother token-level advantage estimates. Instead of relying only on the full Monte Carlo return, it starts from the one-step TD residual:</p>
       <div class="math-block">δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>)</div>
       <p>The TD residual is itself a one-step advantage estimate:</p>
@@ -492,7 +548,7 @@ Question for every token: Did this token contribute to a better-than-expected fi
       <div class="math-block">Â<sub>t</sub><sup>GAE(γ,λ)</sup> = Σ<sub>l=0</sub><sup>T−t</sup>(γλ)<sup>l</sup>δ<sub>t+l</sub>, &nbsp; λ ∈ [0,1]</div>
       <p>GAE propagates the final reward signal backward to earlier tokens while using the value model to reduce noise. Monte Carlo uses the true accumulated token rewards; GAE mixes observed token rewards with bootstrapped value estimates.</p>
 
-      <h3>Estimator comparison</h3>
+      <h3 id="estimator-comparison"><span class="sec-num">3.6</span> Estimator comparison</h3>
       <p>Framed as a single lookup table, four estimators trade off differently:</p>
       <table>
         <thead><tr><th>Framework</th><th>Target Q<sub>t</sub></th><th>Critic baseline V(s<sub>t</sub>)</th><th>Advantage A<sub>t</sub></th></tr></thead>
@@ -506,7 +562,7 @@ Question for every token: Did this token contribute to a better-than-expected fi
       <p>This maps onto two concrete training strategies. A pure Monte Carlo strategy scales the policy gradient using Â = γ<sup>T−t</sup>r<sub>T</sub> − V(s<sub>t</sub>), where every single token inherits the same sequence-level blame or praise, and trains the critic by minimizing MSE directly against the full empirical outcome &mdash; zero bias, but extreme variance, since trajectory fluctuations heavily destabilize the gradient. A GAE strategy scales the policy gradient smoothly using Â<sup>GAE</sup>, where the late-stage penalty or reward echo decays exponentially by (γλ)<sup>l</sup>, and trains the critic against the GAE-bootstrapped value targets instead &mdash; balanced variance (intermediate critic anchors intercept noise), at the cost of some controlled bias if the critic network is still undertrained.</p>
 
 
-      <h2>4. Which LLM parameters can PPO or GRPO update?</h2>
+      <h2 id="which-llm-parameters-can-ppo-or-grpo-update"><span class="sec-num">4</span> Which LLM parameters can PPO or GRPO update?</h2>
       <div class="timeline">Embedding layer
 Transformer block 1
 Transformer block 2
@@ -551,7 +607,7 @@ o_proj</div>
         </tbody>
       </table>
 
-      <h3>Why PPO?</h3>
+      <h3 id="why-ppo"><span class="sec-num">4.1</span> Why PPO?</h3>
       <p>PPO is a policy-gradient algorithm from reinforcement learning. It's used in RLHF to train an LLM safely and efficiently.</p>
       <ul>
         <li>PPO allows stable and constrained updates to the model.</li>
@@ -565,7 +621,7 @@ o_proj</div>
         <li>It helps reduce toxicity, improve helpfulness, and avoid hallucination.</li>
       </ul>
 
-      <h3>DPO: skipping the reward model entirely</h3>
+      <h3 id="dpo-skipping-the-reward-model-entirely"><span class="sec-num">4.2</span> DPO: skipping the reward model entirely</h3>
       <p>DPO improves on PPO's complexity (four models, four moving pipelines) by using pairwise comparison data collected in advance (offline), bypassing the reward-modeling step, and optimizing the language model directly against preference data. The motivation: optimize the policy directly on preference pairs via a classification-style loss.</p>
       <p>The dataset DPO needs has three parts per example:</p>
       <ul>
@@ -577,19 +633,19 @@ o_proj</div>
       <p>L<sub>DPO</sub>(π<sub>θ</sub>; π<sub>ref</sub>) = −E<sub>(x,yw,yl)~D</sub>[log σ(β log(π<sub>θ</sub>(y<sub>w</sub>|x)/π<sub>ref</sub>(y<sub>w</sub>|x)) − β log(π<sub>θ</sub>(y<sub>l</sub>|x)/π<sub>ref</sub>(y<sub>l</sub>|x)))]</p>
       <p>Walking through what minimizing this actually does: it's equivalent to maximizing the implicit rewards r<sub>w</sub> = log(π<sub>θ</sub>(y<sub>w</sub>|x)/π<sub>ref</sub>(y<sub>w</sub>|x)) and r<sub>l</sub> = log(π<sub>ref</sub>(y<sub>l</sub>|x)/π<sub>θ</sub>(y<sub>l</sub>|x)). For the preferred outcome y<sub>w</sub>, we want π<sub>θ</sub>(y<sub>w</sub>|x) to grow; for the dispreferred outcome y<sub>l</sub>, we want it to shrink. And the gradient adapts to how wrong the reference model already was: if π<sub>ref</sub>(y<sub>w</sub>|x) was small, meaning the reference model failed to favor the good response, r<sub>w</sub>'s coefficient becomes large; if π<sub>ref</sub>(y<sub>l</sub>|x) was large, meaning the reference model failed to disfavor the bad response, r<sub>l</sub>'s coefficient becomes large too. In short, DPO pushes hardest exactly where the reference model's preferences were most wrong &mdash; without ever training a separate reward or value model.</p>
 
-      <h3>GRPO: trading the value model for group statistics</h3>
+      <h3 id="grpo-trading-the-value-model-for-group-statistics"><span class="sec-num">4.3</span> GRPO: trading the value model for group statistics</h3>
       <p>GRPO keeps PPO's clipped-ratio structure but removes the value model altogether. Instead of a learned baseline, it samples several responses to the same prompt and uses the group's own average reward as the baseline:</p>
       <p>advantage = reward − group average reward</p>
       <p>This sidesteps the memory and compute cost of training a separate critic, and the difficulty of accurately predicting token-prefix values for long LLM outputs &mdash; but it also means GRPO's advantage estimate is only as good as the diversity of the sampled group, which is exactly the property its later variants (DAPO among them) end up having to patch.</p>
 
-      <h3>DAPO: patching GRPO's four failure modes</h3>
+      <h3 id="dapo-patching-grpo-s-four-failure-modes"><span class="sec-num">4.4</span> DAPO: patching GRPO's four failure modes</h3>
       <p>DAPO doesn't propose a new objective from scratch; it's a set of four targeted fixes to specific ways vanilla GRPO breaks down in practice, especially on long chain-of-thought training.</p>
       <p><strong>1. Clip-Higher &mdash; decoupling the clip bounds.</strong> PPO/GRPO's traditional clipping range is symmetric: ρ<sub>t</sub> ∈ [1−ε, 1+ε] (e.g. [0.8, 1.2] at ε=0.2). That symmetry quietly caps how fast the model can reinforce rare-but-correct behavior: a rare, correct reasoning token with probability 0.01 under the old model can, even inside a fully correct response, only be pushed up to 0.01 × 1.2 = 0.012 in one update. The model therefore struggles to quickly reinforce newly discovered reasoning patterns, increasingly falls back on already-high-probability patterns, and can suffer entropy collapse or reduced exploration. DAPO decouples the bounds &mdash; ρ<sub>t</sub> ∈ [1−ε<sub>low</sub>, 1+ε<sub>high</sub>] with ε<sub>high</sub> &gt; ε<sub>low</sub> (e.g. 0.2 and 0.28, giving [0.8, 1.28]) &mdash; so the model stays cautious about suppressing existing behavior but is allowed a bigger jump when reinforcing a newly discovered correct one.</p>
       <p><strong>2. Dynamic Sampling &mdash; don't waste compute on zero-gradient groups.</strong> GRPO's advantage depends entirely on reward variation within a group of sampled responses to the same prompt. If all G responses to a prompt are correct (R<sub>1</sub>=&hellip;=R<sub>G</sub>=1) or all wrong (R<sub>1</sub>=&hellip;=R<sub>G</sub>=−1), every response's reward equals the group average, so every advantage is exactly zero and the group produces no usable policy gradient. As training progresses the model masters more and more easy prompts, so more and more groups collapse to accuracy=0 or accuracy=1, quietly wasting generation compute and shrinking the effective batch size. DAPO filters to keep only prompts with 0 &lt; accuracy &lt; 1 (some correct, some incorrect among the G samples), and keeps sampling fresh prompts until the batch is filled back up. The intuition: don't spend training signal on prompts the model has already mastered or still can't touch at all &mdash; spend it on prompts right at the model's current capability boundary, where some rollouts succeed and some fail.</p>
       <p><strong>3. Token-level policy gradient loss &mdash; stop underweighting long responses.</strong> Vanilla GRPO averages token loss within each response first, then averages across responses, so every response gets equal total weight regardless of length: L<sub>i</sub> = (1/|o<sub>i</sub>|) Σ<sub>t</sub> L<sub>i,t</sub>, then L<sub>GRPO</sub> = (1/G) Σ<sub>i</sub> L<sub>i</sub>. Concretely, if response A is 100 tokens and response B is 1,000 tokens, each gets ~50% of the total weight under response-level averaging &mdash; so each individual token in the short response ends up carrying roughly 10× the weight of each token in the long one. In long chain-of-thought training this causes two real problems: correct reasoning steps inside long correct answers get under-reinforced, and repetition, errors, and wasted reasoning inside long wrong answers get under-penalized. DAPO instead averages uniformly over every valid token in the whole training batch: L<sub>DAPO</sub> = Σ<sub>i</sub>Σ<sub>t</sub> L<sub>i,t</sub> / Σ<sub>i</sub>|o<sub>i</sub>|. With the same 100- vs. 1,000-token example (using a 900-token response B here), token-level weighting gives A ~10% of total weight and B ~90% &mdash; every reasoning token gets a comparable training signal regardless of which response it's in.</p>
       <p><strong>4. Overlong Reward Shaping &mdash; don't blindly punish truncation.</strong> Generation is capped at some max length (e.g. L<sub>max</sub> = 20,480 tokens); if the model hasn't finished by then, its output is force-truncated. A truncated response isn't necessarily a bad one &mdash; the reasoning so far might be basically correct, the model may simply have been mid-derivation, or the final answer just hadn't been emitted yet. Naively assigning truncated responses a strong negative reward teaches the model that the entire reasoning path was worthless, injecting noise and destabilizing training. DAPO offers two fixes: <em>Overlong Filtering</em>, which masks truncated samples out of the policy-gradient computation entirely rather than treating them as flatly wrong; and <em>Soft Overlong Punishment</em>, which ramps the length penalty up gradually as a response approaches L<sub>max</sub> (using a buffer zone L<sub>cache</sub>) rather than applying a sudden, sharp penalty only once the cap is hit.</p>
 
-      <h2>5. Loss and advantage functions across post-training algorithms</h2>
+      <h2 id="loss-and-advantage-functions-across-post-training-algorithms"><span class="sec-num">5</span> Loss and advantage functions across post-training algorithms</h2>
       <p>The PDF closes with a compact comparison of related objectives. The notation below keeps the same information while expressing it as selectable text.</p>
       <table>
         <thead><tr><th>Method</th><th>Core loss or policy signal</th><th>Advantage / preference signal</th></tr></thead>
@@ -632,10 +688,64 @@ o_proj</div>
         </tbody>
       </table>
     </section>
+    </div>
 
     <footer>
       <a href="index.html">&larr; Back to home</a>
     </footer>
   </main>
+  <script>
+    (function () {
+      var nav = document.querySelector('.rl-toc');
+      if (!nav) return;
+      var box = nav.querySelector('details');
+      if (box) {
+        var wide = window.matchMedia('(min-width: 1180px)');
+        var touched = false, lastAuto = null;
+        box.addEventListener('toggle', function () { if (box.open !== lastAuto) { touched = true; } });
+        var sync = function () {
+          if (touched) return;
+          lastAuto = wide.matches;
+          if (box.open !== wide.matches) { box.open = wide.matches; }
+        };
+        sync();
+        if (wide.addEventListener) { wide.addEventListener('change', sync); }
+        else if (wide.addListener) { wide.addListener(sync); }
+      }
+      var links = Array.prototype.slice.call(nav.querySelectorAll('a[href^="#"]'));
+      var map = {}, heads = [];
+      links.forEach(function (a) {
+        var el = document.getElementById(decodeURIComponent(a.getAttribute('href').slice(1)));
+        if (el) { map[el.id] = a; heads.push(el); }
+      });
+      if (!heads.length) return;
+      var current = null;
+      function update() {
+        var best = heads[0];
+        for (var i = 0; i < heads.length; i++) {
+          if (heads[i].getBoundingClientRect().top <= 120) { best = heads[i]; } else { break; }
+        }
+        if (best === current) return;
+        current = best;
+        links.forEach(function (a) { a.classList.remove('is-current'); });
+        var a = map[best.id];
+        if (!a) return;
+        a.classList.add('is-current');
+        if (nav.scrollHeight > nav.clientHeight + 4) {
+          var top = a.offsetTop - nav.offsetTop;
+          if (top < nav.scrollTop || top > nav.scrollTop + nav.clientHeight - 40) {
+            nav.scrollTop = Math.max(0, top - nav.clientHeight / 2);
+          }
+        }
+      }
+      var ticking = false;
+      window.addEventListener('scroll', function () {
+        if (ticking) return;
+        ticking = true;
+        window.requestAnimationFrame(function () { update(); ticking = false; });
+      }, { passive: true });
+      update();
+    })();
+  </script>
 </body>
 </html>
